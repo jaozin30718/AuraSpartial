@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Sistema Acústico Triangulação</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:#0a0e14; --panel:#12161d; --border:#252b35;
+      --accent:#00ff88; --accent2:#00aaff;
+      --danger:#ff4466; --warn:#ffaa22;
+      --text:#c9d1d9; --dim:#6e7681;
+      --font:'Consolas','Fira Code',monospace;
+    }
+    html, body {
+      width:100%; height:100%;
+      background:var(--bg); color:var(--text);
+      font-family:var(--font); font-size:13px; overflow:hidden;
+    }
+    #app {
+      display:grid;
+      grid-template-rows:44px 1fr;
+      grid-template-columns:280px 1fr 280px;
+      height:100vh;
+    }
+
+    /* HEADER */
+    #header {
+      grid-column:1/-1; background:var(--panel);
+      border-bottom:2px solid var(--accent);
+      display:flex; align-items:center; padding:0 16px; gap:20px; font-size:12px;
+    }
+    .hdr-title { font-size:15px; font-weight:bold; color:var(--text); }
+    .hdr-item { display:flex; align-items:center; gap:6px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--danger); animation:pulse 1.5s infinite; }
+    .dot.on { background:var(--accent); }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .hdr-val { font-weight:bold; color:var(--accent); }
+
+    /* PAINÉIS */
+    .panel {
+      background:var(--panel); padding:14px; overflow-y:auto;
+      display:flex; flex-direction:column; gap:10px;
+      border-right:1px solid var(--border);
+    }
+    .panel:last-child { border-right:none; border-left:1px solid var(--border); }
+    .panel-title {
+      font-size:12px; font-weight:bold; letter-spacing:1px;
+      border-bottom:1px solid var(--border); padding-bottom:5px; margin-bottom:5px;
+    }
+    .sep { border:none; border-top:1px solid var(--border); margin:4px 0; }
+
+    /* MÉTRICAS */
+    .metric { display:flex; flex-direction:column; gap:2px; margin-bottom:6px; }
+    .metric-label { font-size:9px; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; }
+    .metric-value { font-size:20px; font-weight:bold; line-height:1.2; }
+    
+    /* BARRAS */
+    .bar-row { display:flex; align-items:center; gap:6px; margin:2px 0; }
+    .bar-label { font-size:9px; color:var(--dim); width:35px; text-align:right; flex-shrink:0; }
+    .bar-track { flex:1; height:6px; background:#1a1f27; border-radius:3px; overflow:hidden; }
+    .bar-fill { height:100%; border-radius:3px; transition:width .1s ease-out; }
+    .bar-val { font-size:9px; color:var(--text); width:42px; text-align:right; flex-shrink:0; }
+    
+    .bg { background:linear-gradient(90deg,#00ff88,#00cc66); }
+    .bb { background:linear-gradient(90deg,#00aaff,#0088cc); }
+    .by { background:linear-gradient(90deg,#ffaa22,#ff8800); }
+
+    /* CENTRO */
+    #center { position:relative; overflow:hidden; background:var(--bg); }
+    #canvas-map { position:absolute; inset:0; width:100%; height:100%; z-index:1; }
+
+    ::-webkit-scrollbar { width:6px; }
+    ::-webkit-scrollbar-track { background:var(--panel); }
+    ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- HEADER -->
+  <div id="header">
+    <div class="hdr-title">🌐 MAPA DE TRIANGULAÇÃO</div>
+    <div class="hdr-item"><div class="dot" id="ws-dot"></div><span id="ws-txt">Offline</span></div>
+    <div style="flex:1"></div>
+    <div class="hdr-item"><span style="color:var(--dim)">Eventos Ativos:</span><span class="hdr-val" id="hdr-events">0</span></div>
+  </div>
+
+  <!-- NÓ A -->
+  <div class="panel" id="panel-a" style="border-top:3px solid var(--accent)">
+    <!-- JS Inject -->
+  </div>
+
+  <!-- CENTRO CARTESIANO -->
+  <div id="center">
+    <canvas id="canvas-map"></canvas>
+  </div>
+
+  <!-- NÓ B -->
+  <div class="panel" id="panel-b" style="border-top:3px solid var(--accent2)">
+    <!-- JS Inject -->
+  </div>
+</div>
+
+<script>
+// ============================================================
+// TEMPLATE DE PAINEL DE NÓ
+// ============================================================
+function renderPanel(id, title, colorClass) {
+  const c = colorClass === 'accent' ? 'bg' : 'bb';
+  return `
+    <div class="panel-title" style="color:var(--${colorClass})">📍 ${title}</div>
+    
+    <div class="metric">
+      <div class="metric-label">dB RMS (suavizado)</div>
+      <div class="bar-row">
+        <span class="bar-label">L</span>
+        <div class="bar-track"><div class="bar-fill ${c}" id="bar-dbL-${id}"></div></div>
+        <span class="bar-val" id="val-dbL-${id}">--</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">R</span>
+        <div class="bar-track"><div class="bar-fill ${c}" id="bar-dbR-${id}"></div></div>
+        <span class="bar-val" id="val-dbR-${id}">--</span>
+      </div>
+    </div>
+
+    <div class="metric">
+      <div class="metric-label">ZCR (Frequência Dom.)</div>
+      <div class="bar-row">
+        <span class="bar-label">FREQ L</span>
+        <div class="bar-track"><div class="bar-fill by" id="bar-frL-${id}"></div></div>
+        <span class="bar-val" id="val-frL-${id}">--</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">FREQ R</span>
+        <div class="bar-track"><div class="bar-fill by" id="bar-frR-${id}"></div></div>
+        <span class="bar-val" id="val-frR-${id}">--</span>
+      </div>
+    </div>
+
+    <hr class="sep">
+    
+    <div class="metric">
+      <div class="metric-label">Ângulo e Confiança</div>
+      <div class="metric-value" style="color:var(--${colorClass})" id="m-angle-${id}">0°</div>
+      <div class="bar-row" style="margin-top:6px">
+        <span class="bar-label">CONF</span>
+        <div class="bar-track"><div class="bar-fill ${c}" id="bar-conf-${id}"></div></div>
+        <span class="bar-val" id="val-conf-${id}">--</span>
+      </div>
+    </div>
+
+    <hr class="sep">
+    
+    <div class="metric">
+      <div class="metric-label">Telemetria</div>
+      <div style="font-size:11px; color:var(--text); margin-top:4px">
+        <div>Ruído Fundo L: <span id="nfL-${id}" style="color:var(--${colorClass})">--</span> dB</div>
+        <div>Ruído Fundo R: <span id="nfR-${id}" style="color:var(--${colorClass})">--</span> dB</div>
+        <div>Loop Time: <span id="proc-${id}">--</span> µs</div>
+      </div>
+    </div>
+  `;
+}
+
+document.getElementById('panel-a').innerHTML = renderPanel('A', 'NÓ A (0.0m, 0.0m)', 'accent');
+document.getElementById('panel-b').innerHTML = renderPanel('B', 'NÓ B (5.0m, 0.0m)', 'accent2');
+
+// ============================================================
+// ESTADO
+// ============================================================
+let STATE = { nodes: { A:{}, B:{} }, events: [] };
+
+const rC = document.getElementById('canvas-map');
+const rc = rC.getContext('2d');
+
+function resize() {
+  const ctr = document.getElementById('center');
+  rC.width = ctr.clientWidth; rC.height = ctr.clientHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// WEBSOCKET
+// ============================================================
+function connectWS() {
+  const ws = new WebSocket('ws://localhost:8765');
+  ws.onopen = () => {
+    document.getElementById('ws-dot').classList.add('on');
+    document.getElementById('ws-txt').textContent = 'Online';
+  };
+  ws.onmessage = (e) => {
+    STATE = JSON.parse(e.data);
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-dot').classList.remove('on');
+    document.getElementById('ws-txt').textContent = 'Reconectando...';
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = () => ws.close();
+}
+connectWS();
+
+// ============================================================
+// UTILS
+// ============================================================
+function dbN(db) { return Math.max(0, Math.min(1, (db + 90) / 90)); }
+function fN(freq) { return Math.max(0, Math.min(1, freq / 4000)); } // Normaliza freq p/ barra
+
+function setBar(bid, vid, pct, txt) {
+  const b = document.getElementById(bid), v = document.getElementById(vid);
+  if (b) b.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  if (v) v.textContent = txt;
+}
+
+// ============================================================
+// ATUALIZA PAINÉIS
+// ============================================================
+function updatePanels() {
+  document.getElementById('hdr-events').textContent = (STATE.events || []).length;
+
+  ['A', 'B'].forEach(id => {
+    const node = STATE.nodes[id];
+    if(!node || !node.raw) return;
+    const r = node.raw;
+
+    setBar(`bar-dbL-${id}`, `val-dbL-${id}`, dbN(r.db_L)*100, r.db_L.toFixed(1));
+    setBar(`bar-dbR-${id}`, `val-dbR-${id}`, dbN(r.db_R)*100, r.db_R.toFixed(1));
+    
+    setBar(`bar-frL-${id}`, `val-frL-${id}`, fN(r.dom_freq_L)*100, r.dom_freq_L.toFixed(0)+'Hz');
+    setBar(`bar-frR-${id}`, `val-frR-${id}`, fN(r.dom_freq_R)*100, r.dom_freq_R.toFixed(0)+'Hz');
+
+    const ang = r.angle || 0;
+    document.getElementById(`m-angle-${id}`).textContent = (ang>0?'+':'')+ang.toFixed(1)+'°';
+    setBar(`bar-conf-${id}`, `val-conf-${id}`, r.confidence*100, Math.round(r.confidence*100)+'%');
+
+    document.getElementById(`nfL-${id}`).textContent = r.noise_L_db.toFixed(1);
+    document.getElementById(`nfR-${id}`).textContent = r.noise_R_db.toFixed(1);
+    document.getElementById(`proc-${id}`).textContent = r.proc_time_us;
+  });
+}
+
+// ============================================================
+// DESENHO DO MAPA CARTESIANO
+// ============================================================
+function drawMap() {
+  const W = rC.width, H = rC.height;
+  rc.clearRect(0, 0, W, H);
+
+  rc.fillStyle = '#0a0e14';
+  rc.fillRect(0,0,W,H);
+
+  // Escala: Tela representa aprox 7x7 metros para dar margem
+  const m2px = Math.min(W/7, H/7);
+  const cx = W/2, cy = H/2;
+  
+  // Converte (x, y) em metros para pixels (0,0 no canto inf-esq do grid de sala)
+  // Sala tem 5x5m, centralizamos o ponto (2.5, 2.5)
+  const toPx = (x, y) => {
+      return {
+        x: cx + (x - 2.5) * m2px,
+        y: cy - (y - 2.5) * m2px
+      };
+  };
+
+  // 1. Grid
+  rc.strokeStyle = 'rgba(48,54,61,0.3)';
+  rc.lineWidth = 1;
+  for(let x=-1; x<=6; x++) {
+      let p1 = toPx(x, -1), p2 = toPx(x, 6);
+      rc.beginPath(); rc.moveTo(p1.x, p1.y); rc.lineTo(p2.x, p2.y); rc.stroke();
+  }
+  for(let y=-1; y<=6; y++) {
+      let p1 = toPx(-1, y), p2 = toPx(6, y);
+      rc.beginPath(); rc.moveTo(p1.x, p1.y); rc.lineTo(p2.x, p2.y); rc.stroke();
+  }
+
+  // 2. Limites da Sala (5x5m)
+  const roomBL = toPx(0, 0);
+  const roomTR = toPx(5, 5);
+  rc.strokeStyle = 'rgba(255,255,255,0.1)';
+  rc.lineWidth = 2;
+  rc.strokeRect(roomBL.x, roomTR.y, roomTR.x - roomBL.x, roomBL.y - roomTR.y);
+
+  // 3. Posição dos Nós
+  const nodeA = toPx(0.0, 0.0);
+  const nodeB = toPx(5.0, 0.0);
+
+  rc.fillStyle = '#00ff88';
+  rc.beginPath(); rc.arc(nodeA.x, nodeA.y, 6, 0, Math.PI*2); rc.fill();
+  rc.fillStyle = 'rgba(255,255,255,0.8)'; rc.font = '10px monospace';
+  rc.fillText("NÓ A", nodeA.x - 10, nodeA.y + 15);
+
+  rc.fillStyle = '#00aaff';
+  rc.beginPath(); rc.arc(nodeB.x, nodeB.y, 6, 0, Math.PI*2); rc.fill();
+  rc.fillStyle = 'rgba(255,255,255,0.8)';
+  rc.fillText("NÓ B", nodeB.x - 10, nodeB.y + 15);
+
+  // 4. Feixes de Direção
+  ['A', 'B'].forEach(id => {
+    const raw = STATE.nodes[id]?.raw;
+    if(raw) {
+      const ang = raw.angle;
+      const rad = (90 - ang) * Math.PI/180;
+      const origin = id === 'A' ? nodeA : nodeB;
+      const color = id === 'A' ? 'rgba(0,255,136,0.2)' : 'rgba(0,170,255,0.2)';
+      
+      rc.strokeStyle = color; rc.lineWidth = 2;
+      rc.beginPath(); rc.moveTo(origin.x, origin.y);
+      rc.lineTo(origin.x + 1000*Math.cos(rad), origin.y - 1000*Math.sin(rad)); 
+      rc.stroke();
+    }
+  });
+
+  // 5. Injeção de Calor (Triangulação)
+  if(STATE.events) {
+    const now = Date.now()/1000;
+    STATE.events.forEach(e => {
+      let age = now - e.ts;
+      if(age < 0) age = 0;
+      if(age > 2.0) return;
+      
+      let alpha = 1.0 - (age / 2.0);
+      let ePx = toPx(e.x, e.y);
+      
+      // Raio baseado na intensidade do som
+      let intN = dbN(e.intensity);
+      let radius = 15 + intN * 60;
+      
+      const g = rc.createRadialGradient(ePx.x, ePx.y, 0, ePx.x, ePx.y, radius);
+      g.addColorStop(0, `rgba(255,60,60,${alpha * 0.9})`);
+      g.addColorStop(0.3, `rgba(255,180,0,${alpha * 0.6})`);
+      g.addColorStop(1, `rgba(0,0,0,0)`);
+      
+      rc.beginPath();
+      rc.arc(ePx.x, ePx.y, radius, 0, Math.PI*2);
+      rc.fillStyle = g;
+      rc.fill();
+
+      // Marcador X
+      rc.strokeStyle = `rgba(255,255,255,${alpha})`; rc.lineWidth = 1;
+      rc.beginPath();
+      rc.moveTo(ePx.x - 5, ePx.y - 5); rc.lineTo(ePx.x + 5, ePx.y + 5);
+      rc.moveTo(ePx.x + 5, ePx.y - 5); rc.lineTo(ePx.x - 5, ePx.y + 5);
+      rc.stroke();
+
+      rc.fillStyle = `rgba(255,255,255,${alpha})`;
+      rc.fillText(`[${e.x.toFixed(1)}m, ${e.y.toFixed(1)}m]`, ePx.x + 8, ePx.y - 8);
+    });
+  }
+}
+
+// ============================================================
+function animate() {
+  updatePanels();
+  drawMap();
+  requestAnimationFrame(animate);
+}
+animate();
+</script>
+</body>
+</html>

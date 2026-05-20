@@ -1,0 +1,56 @@
+# Core DSP e Simulação Acústica
+pyroomacoustics>=0.7.3
+numpy>=1.24.0
+scipy>=1.10.0
+
+# I/O de Áudio
+soundfile>=0.12.1
+librosa>=0.10.0
+
+# Serialização de Dataset
+h5py>=3.9.0
+webdataset>=0.2.86
+
+# Paralelismo e Progresso
+tqdm>=4.65.0
+joblib>=1.3.0
+
+# Interpolação (trajetórias Doppler)
+# scipy já inclui CubicSpline
+
+# Desenvolvimento / Testes
+pytest>=7.4.0
+pytest-cov>=4.1.0
+matplotlib>=3.7.0    # visualização opcional de heatmaps
+
+# Core ML
+torch>=2.1.0
+pytorch-lightning>=2.1.0
+torchvision>=0.16.0
+einops>=0.7.0
+
+# SSM / Mamba
+mamba-ssm>=1.2.0
+causal-conv1d>=1.1.0
+
+# PEFT / LoRA
+peft>=0.7.0
+transformers>=4.35.0
+
+# Logging e Monitoramento
+wandb>=0.16.0
+tensorboard>=2.14.0
+rich>=13.0.0          # RichProgressBar do Lightning
+
+# Dados e I/O
+h5py>=3.9.0
+soundfile>=0.12.1
+scipy>=1.10.0
+numpy>=1.24.0
+
+# Profiling
+torch-tb-profiler>=0.4.3
+
+# Desenvolvimento
+pytest>=7.4.0
+pytest-cov>=4.1.0

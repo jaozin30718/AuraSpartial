@@ -1,0 +1,9 @@
+outputs/
+wandb/
+__pycache__/
+*.ini
+dataset/
+*.log
+*.tmp
+audio_sources/
+noise_sources/

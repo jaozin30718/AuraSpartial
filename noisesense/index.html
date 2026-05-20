@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NoiseSense v1.0 — Dashboard de Ruído Industrial</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============================================================
+     TOPBAR
+     ============================================================ -->
+<div id="topbar">
+  <!-- Logo -->
+  <div class="logo">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+      <circle cx="14" cy="14" r="13" stroke="#39d0d8" stroke-width="1.5"/>
+      <circle cx="14" cy="14" r="5" fill="#39d0d8" opacity="0.3"/>
+      <circle cx="14" cy="14" r="2" fill="#39d0d8"/>
+      <path d="M14 4 Q20 14 14 24" stroke="#39d0d8" stroke-width="1" fill="none" opacity="0.5"/>
+      <path d="M4 14 Q14 8 24 14" stroke="#58a6ff" stroke-width="1" fill="none" opacity="0.5"/>
+    </svg>
+    <div>
+      <div>NoiseSense <span style="color:var(--text-muted);font-weight:400">v1.0</span></div>
+      <div class="subtitle">Dashboard de Medição de Ruído Industrial — Projeto de Pesquisa</div>
+    </div>
+  </div>
+
+  <!-- Stats rápidos -->
+  <div class="topbar-stats">
+    <div class="tstat">
+      <span class="tstat-icon">🔊</span>
+      <div>
+        <div class="tstat-label">NÓS ATIVOS</div>
+        <div class="tstat-value" id="ts-nodes" style="color:var(--accent-cyan)">0/0</div>
+      </div>
+    </div>
+    <div class="tstat">
+      <span class="tstat-icon">📊</span>
+      <div>
+        <div class="tstat-label">SPL MÁXIMO</div>
+        <div class="tstat-value" id="ts-splmax" style="color:var(--accent-red)">—</div>
+        <div class="tstat-sub">pico do sistema</div>
+      </div>
+    </div>
+    <div class="tstat">
+      <span class="tstat-icon">📉</span>
+      <div>
+        <div class="tstat-label">SPL MÉDIO</div>
+        <div class="tstat-value" id="ts-splmed" style="color:var(--accent-yellow)">—</div>
+        <div class="tstat-sub">todos os nós</div>
+      </div>
+    </div>
+    <div class="tstat">
+      <span class="tstat-icon">⚡</span>
+      <div>
+        <div class="tstat-label">I2S SISTEMA</div>
+        <div class="tstat-value" id="ts-i2s" style="color:var(--accent-green)">—</div>
+      </div>
+    </div>
+    <div class="tstat">
+      <span class="tstat-icon">🎯</span>
+      <div>
+        <div class="tstat-label">FONTE ESTIMADA</div>
+        <div class="tstat-value" id="ts-source" style="color:var(--accent-orange)">—</div>
+      </div>
+    </div>
+    <div class="tstat">
+      <span class="tstat-icon">⚠️</span>
+      <div>
+        <div class="tstat-label">NR-15 CLASSE</div>
+        <div class="tstat-value" id="ts-nr15" style="color:var(--accent-red)">—</div>
+        <div class="tstat-sub">ABNT NBR 10152</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Direita -->
+  <div class="topbar-right">
+    <div style="text-align:right">
+      <div id="clock">00:00:00</div>
+      <div id="clock-date" style="color:var(--text-muted);font-size:10px"></div>
+    </div>
+    <div style="font-size:10px;color:var(--text-secondary);line-height:1.5;text-align:right">
+      Array MEMS I2S<br>3 mics/nó
+    </div>
+    <div class="badge-live">
+      <div class="dot"></div>
+      <span id="sim-status">SIMULANDO</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     STATUS BAR
+     ============================================================ -->
+<div id="statusbar">
+  <div class="sstat ok">
+    <span class="s-label">Sistema</span>
+    <span class="s-value">● Online</span>
+  </div>
+  <div class="sstat" id="sb-sample">
+    <span class="s-label">Sample Rate</span>
+    <span class="s-value">44.1 kHz</span>
+  </div>
+  <div class="sstat" id="sb-bits">
+    <span class="s-label">Bits</span>
+    <span class="s-value">24-bit</span>
+  </div>
+  <div class="sstat" id="sb-algo">
+    <span class="s-label">Algoritmo</span>
+    <span class="s-value">IDW + GCC-PHAT DoA</span>
+  </div>
+  <div class="sstat" id="sb-res">
+    <span class="s-label">Res. Heatmap</span>
+    <span class="s-value">40px/célula</span>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:6px">
+    <button class="btn active" id="btn-sim" onclick="toggleSimulation()">⏸ Pausar</button>
+    <button class="btn" id="btn-hm" onclick="toggleHeatmap()">🌡 Heatmap</button>
+    <button class="btn" id="btn-doa" onclick="toggleDoA()">🧭 DoA Arrows</button>
+    <button class="btn" id="btn-reset" onclick="resetView()">↺ Resetar Vista</button>
+  </div>
+</div>
+
+<!-- ============================================================
+     MAIN LAYOUT
+     ============================================================ -->
+<div id="main">
+
+  <!-- SIDEBAR ESQUERDA -->
+  <div id="sidebar-left">
+    <div class="sidebar-header">
+      <span>⬡ Rede de Sensores</span>
+      <span id="node-count-badge" style="color:var(--accent-cyan)">0 nós</span>
+    </div>
+    <div id="node-list">
+      <!-- Preenchido dinamicamente por JS -->
+    </div>
+    <div id="sidebar-legend">
+      <div>🖱 Clique: selecionar nó</div>
+      <div>🖱 Dir: adicionar nó filho</div>
+      <div>+ Botão: adicionar filho</div>
+    </div>
+  </div>
+
+  <!-- ÁREA CENTRAL -->
+  <div id="center">
+    <div id="canvas-header">
+      <span id="canvas-info">40m × 25m | IDW Heatmap | GCC-PHAT DoA</span>
+    </div>
+    <!-- Bússola Norte -->
+    <div style="position:absolute;top:10px;right:60px;z-index:10;font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:3px">
+      N ↑
+    </div>
+    <!-- Canvas principal -->
+    <canvas id="mapCanvas"></canvas>
+    <!-- Colorbar -->
+    <div id="colorbar">
+      <div style="position:relative">
+        <div id="colorbar-title">dBSPL</div>
+        <canvas id="colorbar-gradient" width="14" height="160"></canvas>
+      </div>
+      <div id="colorbar-labels">
+        <span id="cb-max">95</span>
+        <span>88</span>
+        <span>81</span>
+        <span>74</span>
+        <span id="cb-min">70</span>
+      </div>
+    </div>
+    <!-- Escala -->
+    <div id="scale-bar">
+      <div class="scale-line"></div>
+      <span>10m</span>
+    </div>
+    <div id="canvas-tooltip">Clique num nó para detalhes • Clique direito para adicionar novo nó</div>
+  </div>
+
+  <!-- SIDEBAR DIREITA -->
+  <div id="sidebar-right">
+    <div class="metrics-header">
+      📐 Métricas do Nó
+      <span id="metrics-title" style="color:var(--accent-cyan);font-size:11px;text-transform:none;letter-spacing:0">— Nó 1</span>
+    </div>
+
+    <!-- Info do nó selecionado -->
+    <div id="node-info-top">
+      <div>
+        <div class="node-info-name">
+          <div id="ni-dot" class="node-dot" style="--node-color:#58a6ff"></div>
+          <span id="ni-name">Nó 1</span>
+          <span class="badge online" id="ni-status">ONLINE</span>
+        </div>
+        <div class="node-info-pos" id="ni-pos">X: 3.0m | Y: 3.0m</div>
+      </div>
+      <div>
+        <span class="badge online" id="ni-i2s">I2S OK</span>
+        <div class="mic-dots" style="justify-content:flex-end;margin-top:4px" id="ni-mics">
+          <div class="mic-dot" style="background:#58a6ff"></div>
+          <div class="mic-dot" style="background:#3fb950"></div>
+          <div class="mic-dot" style="background:#f0883e"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SPL grande -->
+    <div class="metrics-section">
+      <div class="metrics-section-title">🔊 Pressão Sonora (RMS/SPL)</div>
+      <div class="spl-display">
+        <div class="spl-big" id="spl-big" style="color:var(--accent-green)">--.-</div>
+        <div class="spl-unit">dBSPL médio</div>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">📊 SPL Pico</span>
+        <span class="metric-value" id="m-splpico">--<span class="metric-unit">dB</span></span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">〰 RMS Médio</span>
+        <span class="metric-value" id="m-rms">--<span class="metric-unit">amplitude</span></span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">💡 Int. Relativa</span>
+        <span class="metric-value" id="m-intrel">--<span class="metric-unit">%</span></span>
+      </div>
+      <div class="progress-row">
+        <div class="progress-track">
+          <div class="progress-fill" id="m-intrel-bar" style="background:var(--accent-blue);width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- I2S Stability -->
+    <div class="metrics-section">
+      <div class="metrics-section-title">⚡ Estabilidade I2S</div>
+      <div class="metric-row">
+        <span class="metric-label">Estabilidade</span>
+        <span class="metric-value" id="m-stab" style="color:var(--accent-green)">--%</span>
+      </div>
+      <div class="progress-row">
+        <div class="progress-track">
+          <div class="progress-fill" id="m-stab-bar" style="background:var(--accent-green);width:0%"></div>
+        </div>
+      </div>
+      <div class="metric-row" style="margin-top:6px">
+        <span class="metric-label">⚠ Frame Errors</span>
+        <span class="metric-value" id="m-errors">0</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Clock Drift</span>
+        <span class="metric-value" id="m-drift">0 ppm</span>
+      </div>
+    </div>
+
+    <!-- DoA -->
+    <div class="metrics-section">
+      <div class="metrics-section-title">🧭 Direção de Chegada (DoA)</div>
+      <canvas id="doa-compass" width="70" height="70"></canvas>
+      <div class="metric-row">
+        <span class="metric-label">🎯 Azimute</span>
+        <span class="metric-value" id="m-doa" style="color:var(--accent-yellow)">--°</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">✅ Confiança</span>
+        <span class="metric-value" id="m-doa-conf">--%</span>
+      </div>
+      <div class="progress-row">
+        <div class="progress-track">
+          <div class="progress-fill" id="m-doa-bar" style="background:var(--accent-yellow);width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FFT -->
+    <div class="metrics-section">
+      <div class="metrics-section-title">📈 Espectro FFT</div>
+      <canvas id="fft-canvas" width="216" height="70"></canvas>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-muted);margin-top:2px">
+        <span>20Hz</span><span>500Hz</span><span>4kHz</span><span>20kHz</span>
+      </div>
+      <div class="metric-row" style="margin-top:4px">
+        <span class="metric-label">Freq. Dominante</span>
+        <span class="metric-value" id="m-fdom" style="color:var(--accent-cyan)">-- Hz</span>
+      </div>
+    </div>
+
+    <!-- Distância e Pico -->
+    <div class="metrics-section">
+      <div class="metrics-section-title">📏 Distância & Transientes</div>
+      <div class="metric-row">
+        <span class="metric-label">📏 Dist. Estimada</span>
+        <span class="metric-value" id="m-dist" style="color:var(--accent-orange)">-- m</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Método</span>
+        <span class="metric-value" style="color:var(--text-secondary);font-size:10px">1/r² + TDOA</span>
+      </div>
+      <!-- Transient detector -->
+      <div class="transient-indicator">
+        <div class="transient-dot" id="transient-dot"></div>
+        <div>
+          <div style="font-size:11px;font-weight:600" id="transient-label">Sem Transiente</div>
+          <div style="font-size:9px;color:var(--text-muted)" id="transient-count">Eventos: 0</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Waveform decorativa -->
+    <div class="metrics-section">
+      <div class="metrics-section-title">〰 Forma de Onda (mic médio)</div>
+      <canvas id="wave-canvas" width="216" height="48" style="width:100%;height:48px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px"></canvas>
+    </div>
+
+  </div><!-- fim sidebar-right -->
+</div><!-- fim main -->
+
+<!-- ============================================================
+     MODAL — ADICIONAR NÓ
+     ============================================================ -->
+<div id="modal-overlay">
+  <div id="modal">
+    <h2>➕ Adicionar Novo Nó</h2>
+    <div class="modal-sub">Defina a posição em relação ao nó de referência</div>
+    <div class="modal-ref-info" id="modal-ref-info">
+      Referência: <strong id="modal-ref-name">Nó 1</strong>
+      em <strong id="modal-ref-pos">(3.0, 3.0)</strong>
+    </div>
+    <label>Offset em X (metros) — positivo = direita</label>
+    <input type="number" id="modal-dx" placeholder="ex: 10" step="0.5"/>
+    <label>Offset em Y (metros) — positivo = baixo</label>
+    <input type="number" id="modal-dy" placeholder="ex: 5" step="0.5"/>
+    <label>Nome do nó (opcional)</label>
+    <input type="text" id="modal-name" placeholder="ex: Nó 5"/>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn active" onclick="confirmAddNode()">✔ Adicionar</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONTEXT MENU -->
+<div id="canvas-ctx-menu">
+  <div class="ctx-item" id="ctx-select">🔍 Selecionar Nó</div>
+  <div class="ctx-item" id="ctx-add">➕ Adicionar Nó Filho</div>
+  <div class="ctx-divider"></div>
+  <div class="ctx-item danger" id="ctx-remove">🗑 Remover Nó</div>
+</div>
+
+<!-- ============================================================
+     JAVASCRIPT PRINCIPAL
+     ============================================================ -->
+<script src="script.js"></script>
+</body>
+</html>

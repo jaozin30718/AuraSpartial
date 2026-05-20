@@ -1,0 +1,684 @@
+/* ============================================================
+   RESET E VARIÁVEIS GLOBAIS
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-primary:    #0d1117;
+  --bg-secondary:  #161b22;
+  --bg-card:       #1c2128;
+  --bg-hover:      #21262d;
+  --border:        #30363d;
+  --border-light:  #3d444d;
+  --text-primary:  #e6edf3;
+  --text-secondary:#8b949e;
+  --text-muted:    #484f58;
+  --accent-blue:   #58a6ff;
+  --accent-cyan:   #39d0d8;
+  --accent-green:  #3fb950;
+  --accent-yellow: #d29922;
+  --accent-orange: #f0883e;
+  --accent-red:    #f85149;
+  --accent-purple: #bc8cff;
+  --node-colors:   #58a6ff, #f0883e, #3fb950, #bc8cff, #39d0d8, #f85149;
+  --radius:        8px;
+  --radius-sm:     4px;
+  --shadow:        0 4px 16px rgba(0,0,0,0.4);
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+   TOPBAR
+   ============================================================ */
+#topbar {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+  z-index: 100;
+}
+
+#topbar .logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent-cyan);
+  white-space: nowrap;
+}
+
+#topbar .logo svg { flex-shrink: 0; }
+
+#topbar .logo .subtitle {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.topbar-stats {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.tstat {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.tstat .tstat-icon { font-size: 14px; }
+.tstat .tstat-label { color: var(--text-secondary); font-size: 10px; }
+.tstat .tstat-value { font-weight: 700; font-size: 14px; }
+.tstat .tstat-sub { color: var(--text-muted); font-size: 9px; }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+#clock { font-size: 18px; font-weight: 700; color: var(--accent-blue); font-variant-numeric: tabular-nums; }
+#clock-date { font-size: 10px; color: var(--text-secondary); }
+
+.badge-live {
+  background: var(--bg-card);
+  border: 1px solid var(--accent-green);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-green);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge-live .dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.7); }
+}
+
+/* ============================================================
+   STATUSBAR (segunda linha)
+   ============================================================ */
+#statusbar {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sstat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 11px;
+}
+
+.sstat .s-label { color: var(--text-secondary); }
+.sstat .s-value { font-weight: 600; }
+.sstat.warn .s-value { color: var(--accent-yellow); }
+.sstat.danger .s-value { color: var(--accent-red); }
+.sstat.ok .s-value { color: var(--accent-green); }
+
+.btn {
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn:hover { background: var(--bg-hover); border-color: var(--accent-blue); }
+.btn.active { background: rgba(88,166,255,0.15); border-color: var(--accent-blue); color: var(--accent-blue); }
+.btn.danger { border-color: var(--accent-red); color: var(--accent-red); }
+.btn.danger:hover { background: rgba(248,81,73,0.15); }
+
+/* ============================================================
+   LAYOUT PRINCIPAL
+   ============================================================ */
+#main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ============================================================
+   SIDEBAR ESQUERDA — Lista de Nós
+   ============================================================ */
+#sidebar-left {
+  width: 220px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  padding: 10px 12px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#node-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#node-list::-webkit-scrollbar { width: 4px; }
+#node-list::-webkit-scrollbar-track { background: transparent; }
+#node-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.node-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+
+.node-card:hover { border-color: var(--border-light); background: var(--bg-hover); }
+.node-card.selected { border-color: var(--node-color); background: rgba(var(--node-rgb), 0.08); }
+
+.node-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.node-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--node-color);
+  box-shadow: 0 0 6px var(--node-color);
+  flex-shrink: 0;
+}
+
+.node-name { font-weight: 700; font-size: 12px; flex: 1; margin-left: 6px; }
+
+.node-spl {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--node-color);
+}
+
+.node-pos { font-size: 10px; color: var(--text-secondary); margin-bottom: 3px; }
+.node-doa { font-size: 10px; color: var(--text-muted); }
+
+.node-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.bar-track {
+  flex: 1;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
+
+.node-add-btn {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--node-color);
+  background: transparent;
+  color: var(--node-color);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.node-add-btn:hover { background: var(--node-color); color: #000; }
+
+/* ============================================================
+   SIDEBAR LEGEND (canto esq. inferior)
+   ============================================================ */
+#sidebar-legend {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  font-size: 9px;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+/* ============================================================
+   ÁREA CENTRAL — Canvas
+   ============================================================ */
+#center {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+#canvas-header {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  z-index: 10;
+  background: rgba(13,17,23,0.8);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+#canvas-tooltip {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: rgba(13,17,23,0.85);
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Canvas */
+#mapCanvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+}
+
+/* Escala */
+#scale-bar {
+  position: absolute;
+  bottom: 36px;
+  left: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.scale-line {
+  width: 80px;
+  height: 8px;
+  border-left: 2px solid var(--text-secondary);
+  border-right: 2px solid var(--text-secondary);
+  border-bottom: 2px solid var(--text-secondary);
+}
+
+/* Legenda heatmap (colorbar) */
+#colorbar {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+#colorbar-gradient {
+  width: 14px;
+  height: 160px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+#colorbar-labels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+#colorbar-title {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* ============================================================
+   SIDEBAR DIREITA — Métricas do Nó
+   ============================================================ */
+#sidebar-right {
+  width: 240px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+#sidebar-right::-webkit-scrollbar { width: 4px; }
+#sidebar-right::-webkit-scrollbar-track { background: transparent; }
+#sidebar-right::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.metrics-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  z-index: 5;
+}
+
+.metrics-section {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.metrics-section-title {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+}
+.metric-label { color: var(--text-secondary); font-size: 11px; }
+.metric-value { font-weight: 600; font-size: 12px; font-variant-numeric: tabular-nums; }
+.metric-unit { font-size: 9px; color: var(--text-muted); margin-left: 2px; }
+
+/* SPL grande */
+.spl-display {
+  text-align: center;
+  padding: 10px 0;
+}
+.spl-big {
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.spl-unit { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+/* Barra de progresso */
+.progress-row { margin-top: 4px; }
+.progress-track {
+  height: 5px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 3px;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+/* Canvas FFT */
+#fft-canvas {
+  width: 100%;
+  height: 70px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+}
+
+/* Compass DoA */
+#doa-compass {
+  width: 70px; height: 70px;
+  margin: 6px auto;
+}
+
+/* Status badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.badge.online { background: rgba(63,185,80,0.15); color: var(--accent-green); border: 1px solid var(--accent-green); }
+.badge.warn   { background: rgba(210,153,34,0.15); color: var(--accent-yellow); border: 1px solid var(--accent-yellow); }
+.badge.error  { background: rgba(248,81,73,0.15);  color: var(--accent-red);    border: 1px solid var(--accent-red); }
+
+/* Node info top */
+#node-info-top {
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.node-info-name {
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.node-info-pos { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+
+/* Mic dots */
+.mic-dots {
+  display: flex;
+  gap: 4px;
+}
+.mic-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 1px solid #fff;
+}
+
+/* Transient indicator */
+.transient-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  margin-top: 6px;
+}
+.transient-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  transition: all 0.1s;
+}
+.transient-dot.active {
+  background: var(--accent-red);
+  box-shadow: 0 0 8px var(--accent-red);
+}
+
+/* ============================================================
+   MODAL — Adicionar Nó
+   ============================================================ */
+#modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(3px);
+}
+#modal-overlay.open { display: flex; }
+
+#modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 340px;
+  box-shadow: var(--shadow);
+}
+#modal h2 { font-size: 16px; margin-bottom: 4px; color: var(--text-primary); }
+#modal .modal-sub { font-size: 11px; color: var(--text-secondary); margin-bottom: 16px; }
+#modal label { display: block; font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+#modal input {
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+#modal input:focus { border-color: var(--accent-blue); }
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.modal-ref-info {
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 14px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.modal-ref-info strong { color: var(--text-primary); }
+
+/* ============================================================
+   ANIMAÇÕES
+   ============================================================ */
+@keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+#modal { animation: fadeIn 0.15s ease; }
+
+/* ============================================================
+   TOOLTIP canvas
+   ============================================================ */
+#canvas-ctx-menu {
+  position: fixed;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 4px 0;
+  z-index: 200;
+  display: none;
+  box-shadow: var(--shadow);
+  min-width: 160px;
+}
+#canvas-ctx-menu.open { display: block; }
+.ctx-item {
+  padding: 7px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.1s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ctx-item:hover { background: var(--bg-hover); }
+.ctx-item.danger { color: var(--accent-red); }
+.ctx-divider { height: 1px; background: var(--border); margin: 3px 0; }
+
+/* ============================================================
+   MICRO WAVEFORM (decorativo)
+   ============================================================ */
+.waveform-mini {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 16px;
+}
+.waveform-mini span {
+  display: block;
+  width: 2px;
+  background: var(--node-color, #58a6ff);
+  border-radius: 1px;
+  transition: height 0.3s ease;
+}
