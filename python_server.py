@@ -53,14 +53,16 @@ SAMPLE_RATE   = 44100
 ANALYSIS_SIZE = 512
 HOP_SIZE      = ANALYSIS_SIZE // 2  # 256
 
-XCORR_MAX_LAG = 16
+# CORREÇÃO: Som leva até 23 amostras para cruzar 17.3cm a 44.1kHz. 
+# Elevado para 32 para capturar ângulos rasantes sem truncar.
+XCORR_MAX_LAG = 32
 MIC_DIST_M    = 0.1
 
 EMA_FAST = 0.3
 EMA_SLOW = 0.1
 
 # Geometria da sala (metros)
-POS_NO_A  = (20.0, 12.5)  # Centro do galpão de 40x25 metros
+POS_NO_A  = (32.0, 5.0)   # Canto Superior Direito do galpão de 40x25 metros
 ROOM_BBOX = (-1.0, -1.0, 41.0, 26.0)  # (x_min, y_min, x_max, y_max) ajustado pro galpão
 
 SYNC_WINDOW_MS = 50
@@ -291,23 +293,26 @@ class SoftNoiseGate:
 # ─────────────────────────────────────────────────────────────
 # CROSS-CORRELATION via FFT — O(N log N)
 # ─────────────────────────────────────────────────────────────
-def xcorr_fft(left: np.ndarray, right: np.ndarray,
-              max_lag: int = XCORR_MAX_LAG) -> tuple[int, float]:
+def xcorr_fft(left: np.ndarray, right: np.ndarray, max_lag: int = XCORR_MAX_LAG) -> tuple[int, float]:
     """
-    Correlação cruzada normalizada via FFT: O(N log N).
-    Substitui np.correlate(mode='full') que é O(N²).
+    ALGORITMO UPGRADE: GCC-PHAT (Generalized Cross-Correlation).
+    Extremamente imune a ecos e variações de tom/frequência.
     """
     N    = len(left)
-    norm = math.sqrt(float(np.dot(left, left) * np.dot(right, right)))
-    if norm < 1e-12:
-        return 0, 0.0
+    window = np.hanning(N)
 
-    nfft     = 1 << (2 * N - 1).bit_length()  # próxima potência de 2
-    FL       = np.fft.rfft(left,  nfft)
-    FR       = np.fft.rfft(right, nfft)
-    corr     = np.fft.irfft(FL * np.conj(FR), nfft)
+    nfft     = 1 << (2 * N - 1).bit_length()
+    FL       = np.fft.rfft(left * window, nfft)
+    FR       = np.fft.rfft(right * window, nfft)
+    
+    cross = FL * np.conj(FR)
+    mag = np.abs(cross)
+    mag[mag < 1e-12] = 1e-12
+    gcc_phat = cross / mag
+    
+    corr = np.fft.irfft(gcc_phat, nfft)
     # Rearranja: lags negativos vêm do final
-    corr_full = np.concatenate([corr[-(N - 1):], corr[:N]]) / norm
+    corr_full = np.concatenate([corr[-(N - 1):], corr[:N]])
 
     center = N - 1
     lo     = max(0,            center - max_lag)
@@ -383,34 +388,33 @@ class NarrowbandSourceSeparator:
         if total_energy < 1e-12:
             return []
 
-        # Calcular DoA por bin de frequência usando fase entre pares
-        # Par 1→2 e Par 1→3
-        phase_12 = np.angle(specs[1] * np.conj(specs[0]))
-        phase_13 = np.angle(specs[2] * np.conj(specs[0]))
+        # CORREÇÃO NARROWBAND: Nova Geometria Física [0]=Esq, [1]=Dir, [2]=Frente
+        spec_center = (specs[0] + specs[1]) / 2.0
+        phase_RL = np.angle(specs[1] * np.conj(specs[0]))         # Fase Dir -> Esq
+        phase_FC = np.angle(specs[2] * np.conj(spec_center))      # Fase Frente -> Centro
 
-        c = 343.0
-        R = MIC_DIST_M
-
-        # Converter diferenças de fase em ângulos (por bin de frequência)
-        # Evitar divisão por zero nas freqs baixas
         omega = 2.0 * np.pi * self.freqs
         omega[0] = 1e-12  # DC
 
-        # Time delays por bin
-        tau_12 = phase_12 / omega
-        tau_13 = phase_13 / omega
-
-        # Ângulo por bin (mesma fórmula TDOA triangular)
-        cos_t = (c / (math.sqrt(3) * R)) * (tau_13 - tau_12)
-        sin_t = (c / (3 * R)) * (tau_12 + tau_13)
-        angles_per_bin = np.degrees(np.arctan2(sin_t, cos_t))
-        angles_per_bin = (angles_per_bin + 90) % 360  # Alinhar com canvas
+        # CORREÇÃO FÍSICA: Fases limpas (sem inversão algébrica artificial)
+        tau_RL = phase_RL / omega
+        tau_FC = phase_FC / omega
+        
+        # ESCALA GEOMÉTRICA DO TRIÂNGULO EQUILÁTERO
+        # O Eixo Y (Frente-Centro) é fisicamente mais curto que o Eixo X (Esq-Dir)
+        # Multiplicamos Y por (2 / sqrt(3)) para transformar o oval acústico num círculo perfeito.
+        X = tau_RL
+        Y = tau_FC / (math.sqrt(3) / 2.0)
+        
+        angles_per_bin = np.degrees(np.arctan2(X, Y))
+        angles_per_bin = (angles_per_bin + 360) % 360
 
         # Peso = magnitude média (ignora DC e freqs inválidas acima de Nyquist/2)
         weights = avg_mag.copy()
         weights[0] = 0  # ignorar DC
-        # Ignorar bins abaixo de 80Hz e acima de 10kHz
-        valid = (self.freqs >= 80) & (self.freqs <= 10000)
+        # CORREÇÃO FÍSICA: f_max = c / (2 * (R * sqrt(3))) = ~990Hz.
+        # Acima de 900Hz, a fase (phase_12) enrola (> PI) e inverte frente/trás aleatoriamente.
+        valid = (self.freqs >= 80) & (self.freqs <= 900)
         weights[~valid] = 0
 
         # Construir histograma angular ponderado
@@ -567,33 +571,20 @@ class AudioDSP:
 
         is_silence = (db_L < -65.0 and db_R < -65.0)
 
-        # DoA 3Mics (Triângulo M1, M2, M3)
+        # DoA 3Mics Broadband (Geometria L/R/F)
         if is_silence:
             angle_raw = self.ema[nid]['angle']
             conf_raw = 0.0
-            lag21, coh21, lag31, coh31 = 0, 0.0, 0, 0.0
+            lag_RL, coh_RL, lag_FC, coh_FC = 0, 0.0, 0, 0.0
             best_lag, coherence = 0, 0.0
         elif len(channels) >= 3:
-            lag21, coh21 = xcorr_fft(channels[1], channels[0], XCORR_MAX_LAG)
-            lag31, coh31 = xcorr_fft(channels[2], channels[0], XCORR_MAX_LAG)
-            t21 = lag21 / self.sr
-            t31 = lag31 / self.sr
-            
-            c = 343.0
-            R = MIC_DIST_M # Assumindo MIC_DIST_M = raio do centro até cada mic
-            
-            cos_t = (c / (math.sqrt(3) * R)) * (t31 - t21)
-            sin_t = (c / (3 * R)) * (t21 + t31)
-            
-            # Normalizar se exceder 1 (acontece com ruidos)
-            norm = math.sqrt(cos_t**2 + sin_t**2)
-            if norm > 0 and norm < 5.0: # Sanity check
-                angle_raw = math.degrees(math.atan2(sin_t, cos_t))
-                # Rotacionar +90 para alinhar com o eixo Y do canvas web
-                angle_raw = (angle_raw + 90) % 360
-            else:
-                angle_raw = self.ema[nid]['angle'] # Mantem
-            conf_raw = max(0.0, min(1.0, (coh21 + coh31) / 2.0))
+            # 🔴 CORREÇÃO SUPREMA: O motor Broadband (Seta) sofre com o micro-delay 
+            # de hardware do I2S. Bypass do cálculo falho! 
+            # O ângulo será ditado EXCLUSIVAMENTE pelo motor Narrowband (Esfera).
+            angle_raw = self.ema[nid]['angle']
+            conf_raw  = self.ema[nid]['conf']
+            lag_RL, coh_RL = 0, 0.0
+            best_lag, coherence = 0, 0.0
         else:
             # Fallback 2 mics
             best_lag, coherence = xcorr_fft(left, right, XCORR_MAX_LAG)
@@ -625,7 +616,7 @@ class AudioDSP:
         nf_R = self._safe_db(self.noise[nid]['rms'][1]) \
                if self.cal_done.get(nid) else -90.0
 
-        itd_lag_val = best_lag if len(channels) < 3 else lag21
+        itd_lag_val = best_lag if len(channels) < 3 else lag_RL
         coh_val = coherence if len(channels) < 3 else conf_raw
 
         return {
@@ -775,7 +766,7 @@ if PLAY_AUDIO:
 def _ptp_worker():
     """
     Thread que recebe pings PTP dos ESP32 e responde com
-    3 timestamps (t1_echo, t2, t3) para cálculo de offset.
+    8 bytes de offset temporal para sincronização.
     """
     ptp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     ptp_sock.bind((UDP_IP, PTP_PORT))
@@ -787,14 +778,23 @@ def _ptp_worker():
             data, addr = ptp_sock.recvfrom(64)
             if len(data) < 9:
                 continue
+            
+            # ESP32 envia: 8 bytes timestamp + 1 byte ID
             t1_us        = struct.unpack_from('<q', data, 0)[0]
-            t2_us        = int(time.time() * 1e6)   # recebimento
             node_id      = chr(data[8])
-            t3_us        = int(time.time() * 1e6)   # envio
-            response     = struct.pack('<qqq', t1_us, t2_us, t3_us)
+            
+            # Epoch atual do servidor Python em microsegundos
+            t2_us        = int(time.time() * 1e6)   
+            
+            # O ESP32 usa esp_timer_get_time() que é uptime desde o boot.
+            # O Python usa Epoch. O offset é a diferença bruta.
+            offset       = t2_us - t1_us
+            
+            # Envia exatamente 8 bytes de volta (o ESP32 tem `if (pktSize == 8)`)
+            response     = struct.pack('<q', offset)
             ptp_sock.sendto(response, (addr[0], 5006))
-            print(f"[PTP] Nó '{node_id}' | RTT_proc="
-                  f"{t3_us - t2_us} µs | ip={addr[0]}")
+            
+            print(f"[PTP] Nó '{node_id}' sincronizado | offset={offset} µs | ip={addr[0]}")
         except socket.timeout:
             pass
         except Exception as exc:
@@ -842,6 +842,22 @@ def _compute_on_audio(node_id, frame, ts_us, *channels):
     else:
         result['sources'] = []
 
+    # 🔗 SINCRONIZAÇÃO ABSOLUTA: SETA = ESFERA
+    if result['sources']:
+        best_src = max(result['sources'], key=lambda s: s['confidence'])
+        target_ang = best_src['angle']
+        
+        # Suaviza a seta em direção à esfera para movimento fluido
+        curr_ang = dsp.ema[node_id]['angle']
+        diff = (target_ang - curr_ang + 180.0) % 360.0 - 180.0
+        new_ang = (curr_ang + 0.4 * diff) % 360.0
+        
+        dsp.ema[node_id]['angle'] = new_ang
+        dsp.ema[node_id]['conf']  = best_src['confidence']
+        
+        result['angle'] = round(new_ang, 1)
+        result['confidence'] = best_src['confidence']
+
     return result
 
 
@@ -863,54 +879,65 @@ async def on_audio(node_id, frame, ts_us, *channels):
             }
         node   = state["nodes"][node_id]
         node["raw"] = result
-        db_avg = (result["db_L"] + result["db_R"]) / 2.0
+        # CORREÇÃO: Forçar cast para float nativo para evitar crash no json.dumps (NumPy type)
+        db_avg = float((result["db_L"] + result["db_R"]) / 2.0)
         node["history_db"].append(db_avg)
         if db_avg > node["peak"]:
             node["peak"] = db_avg
         node["avg"] = round(
             sum(node["history_db"]) / len(node["history_db"]), 1
         )
+        
+        # 1. RASTREADOR DE AMBIENTE (Baseline super lenta)
+        if "ambient_db" not in node:
+            node["ambient_db"] = db_avg
+        node["ambient_db"] = 0.95 * node["ambient_db"] + 0.05 * db_avg  # Adaptação levemente mais rápida
+        
+        amb_ang = result['angle']
+        # HALO ACÚSTICO: O som ambiente deve formar uma aura envolta do próprio microfone
+        # Raio de apenas 0.5 a 3 metros (focando a mancha de calor no Nó A)
+        amb_dist = max(0.5, min(3.0, (node["ambient_db"] + 90.0) * 0.05))
+        amb_rad = math.radians(amb_ang)
+        result['ambient_x'] = max(ROOM_BBOX[0], min(ROOM_BBOX[2], POS_NO_A[0] + amb_dist * math.sin(amb_rad)))
+        result['ambient_y'] = max(ROOM_BBOX[1], min(ROOM_BBOX[3], POS_NO_A[1] - amb_dist * math.cos(amb_rad)))
+        result['ambient_db'] = round(node["ambient_db"], 1)
 
-        # Gerar eventos individuais POR FONTE separada
+        # 2. DETECTOR DE PICOS (Transientes > 6dB acima do fundo)
+        is_peak = (db_avg > node["ambient_db"] + 6.0)
         now_ts = time.time()
-        for src in result.get('sources', []):
-            src_ang = src['angle']
-            src_db = src['db']
-            src_conf = src['confidence']
-            if src_db <= -45.0 or src_conf < 0.1:
-                continue
+        if is_peak:
+            for src in result.get('sources', []):
+                src_ang = src['angle']
+                src_db = src['db']
+                src_conf = src['confidence']
+                if src_db <= -45.0 or src_conf < 0.1:
+                    continue
 
-            # Distância por SPL da fonte individual
-            dist_spl = max(0.5, min(40.0, 10.0 ** ((-40.0 - src_db) / 20.0)))
+                dist_spl = max(0.5, min(40.0, 10.0 ** ((-40.0 - src_db) / 20.0)))
+                coh = max(0.01, min(1.0, src_conf))
+                dist_coh = 0.5 * math.exp(4.5 * (1.0 - coh))
+                dist_est = max(0.5, min(40.0, 0.4 * dist_spl + 0.6 * dist_coh))
 
-            # Distância por coerência da fonte (DRR)
-            coh = max(0.01, min(1.0, src_conf))
-            dist_coh = 0.5 * math.exp(4.5 * (1.0 - coh))
-            dist_est = max(0.5, min(40.0, 0.4 * dist_spl + 0.6 * dist_coh))
+                ang_rad = math.radians(src_ang)
+                x_est = POS_NO_A[0] + dist_est * math.sin(ang_rad)
+                y_est = POS_NO_A[1] - dist_est * math.cos(ang_rad)
 
-            # Ângulo 360° → coordenadas do mundo
-            # 0° = Norte (+Y), 90° = Leste (+X), 180° = Sul (-Y), 270° = Oeste (-X)
-            ang_rad = math.radians(src_ang)
-            x_est = POS_NO_A[0] + dist_est * math.sin(ang_rad)
-            y_est = POS_NO_A[1] + dist_est * math.cos(ang_rad)
+                xmin, ymin, xmax, ymax = ROOM_BBOX
+                x_est = max(xmin, min(xmax, x_est))
+                y_est = max(ymin, min(ymax, y_est))
 
-            # Clamp ao bounding box
-            xmin, ymin, xmax, ymax = ROOM_BBOX
-            x_est = max(xmin, min(xmax, x_est))
-            y_est = max(ymin, min(ymax, y_est))
+                state["events"].append({
+                    "x": round(x_est, 2),
+                    "y": round(y_est, 2),
+                    "angle": round(src_ang, 1),
+                    "intensity": round(src_db, 1),
+                    "confidence": round(src_conf, 2),
+                    "dom_freq": src.get('dom_freq', 0),
+                    "ts": now_ts,
+                })
 
-            state["events"].append({
-                "x": round(x_est, 2),
-                "y": round(y_est, 2),
-                "intensity": round(src_db, 1),
-                "confidence": round(src_conf, 2),
-                "dom_freq": src.get('dom_freq', 0),
-                "ts": now_ts,
-            })
-
-        now = time.time()
-        state["events"] = [e for e in state["events"]
-                           if now - e["ts"] < 2.0]
+        # Limpar eventos velhos (mantém só por 1.5s)
+        state["events"] = [e for e in state["events"] if now_ts - e["ts"] < 1.5]
         # Limitar para evitar JSON gigante no WebSocket
         if len(state["events"]) > 50:
             state["events"] = state["events"][-50:]
@@ -1012,13 +1039,10 @@ async def process_packet(data: bytes):
 
     outs = [np.concatenate(nr_out[i]) for i in range(3)]
 
-    # 3. Soft saturação (tanh com zona linear)
-    outs = [soft_saturate(o, drive_db=6.0, makeup_db=-1.5, knee=0.7) for o in outs]
-
-    # 4. Playback (Nó A)
+    # 3. Playback (Nó A) - Aplicando Saturação APENAS na rota de áudio (preservando fidelidade da análise DSP)
     if PLAY_AUDIO and node_id == "A":
-        pb_L = dc_block_fast(outs[0], "A_L")
-        pb_R = dc_block_fast(outs[1], "A_R")
+        pb_L = soft_saturate(dc_block_fast(outs[0], "A_L"), drive_db=6.0, makeup_db=-1.5, knee=0.7)
+        pb_R = soft_saturate(dc_block_fast(outs[1], "A_R"), drive_db=6.0, makeup_db=-1.5, knee=0.7)
         chunk = np.column_stack((
             pb_L.astype(np.float32),
             pb_R.astype(np.float32),
@@ -1042,6 +1066,9 @@ async def process_packet(data: bytes):
                 default=lambda o: list(o) if isinstance(o, collections.deque) else str(o)
             )
             await broadcast(msg)
+            # CORREÇÃO: Limpar eventos enviados para não causar saturação térmica infinita no Heatmap
+            async with _state_lock:
+                state["events"].clear()
 
 
 async def main_loop():

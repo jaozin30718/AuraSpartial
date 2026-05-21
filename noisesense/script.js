@@ -2,8 +2,8 @@
    CONFIGURAÇÕES GLOBAIS DO GALPÃO
    ============================================================== */
 const WAREHOUSE = {
-  width:  40,   // metros
-  height: 25,   // metros
+  width:  40,  // Correção: Galpão de 40 metros para alinhar com o DSP
+  height: 25,  // Correção: Galpão de 25 metros para alinhar com o DSP
   // Obstáculos internos (máquinas/estruturas) [x, y, w, h] em metros
   obstacles: [],
   // Paredes internas
@@ -46,6 +46,7 @@ let state = {
   tick: 0,             // Contador de ticks da simulação
   heatmapData: null,   // Cache do heatmap
   heatmapDirty: true,  // Flag para recalcular heatmap
+  peakActive: 0.0,     // Alpha (transparência) da Seta e Esfera
   heatGrid: new Float32Array(HEAT_COLS * HEAT_ROWS),  // Grid acumulativo
 };
 
@@ -99,6 +100,10 @@ function init() {
     if (!state.simRunning) return;
     state.tick++;
     if (state.tick % 5 === 0) state.heatmapDirty = true;
+    
+    // Fade out da Seta e Esfera de Transientes
+    if (state.peakActive > 0) state.peakActive = Math.max(0, state.peakActive - 0.035);
+    
     updateTopbar();
     updateSidebarLeft();
     updateSidebarRight();
@@ -138,7 +143,7 @@ function initWebSocket() {
         let nodeName = `Nó ${nid}`;
         let n = state.nodes.find(node => node.name === nodeName);
         if (!n) {
-           let nx = 20.0, ny = 12.5; // Posição central do galpão
+           let nx = 32.0, ny = 5.0; // Posição do Nó A (Top Right)
            if (nid !== "A") {
              nx = Math.random() * 20 + 10;
              ny = Math.random() * 15 + 5;
@@ -159,6 +164,12 @@ function initWebSocket() {
         // Fontes separadas (se disponíveis)
         n.sources = nodeData.raw.sources || [];
         
+        // ---- 1. RASTREAMENTO AMBIENTE (Heatmap Constante e Forte) ----
+        if (nodeData.raw.ambient_x !== undefined) {
+           // Multiplicador gigante (3.0) para a Aura Térmica ser muito visível ao redor do Nó
+           accumulateHeatEvent(nodeData.raw.ambient_x, nodeData.raw.ambient_y, nodeData.raw.ambient_db, 3.0);
+        }
+        
         // Atualizar bands FFT fake baseadas na energia
         n.fftBands = n.fftBands.map((v, i) => v * 0.8 + Math.random() * 0.2);
         
@@ -168,14 +179,16 @@ function initWebSocket() {
         n.waveform[n.waveform.length - 1] = (Math.random() - 0.5) * 2 * (n.spl - 60) / 40;
       }
       
-      // Acumular TODOS os eventos no heatmap grid
+      // ---- 2. PICOS E TRANSIENTES (Apenas Seta e Esfera, SEM HEATMAP!) ----
       if (data.events && data.events.length > 0) {
-        for (const ev of data.events) {
-          accumulateHeatEvent(ev.x, ev.y, ev.intensity);
-        }
         // Posição da fonte mais intensa para o indicador
         let best = data.events.reduce((a, b) => a.intensity > b.intensity ? a : b);
         state.sourcePos = { x: best.x, y: best.y };
+        state.peakActive = 1.0; // Fade In instantâneo
+        
+        let nA = state.nodes.find(n => n.name === 'Nó A');
+        if (nA && best.angle !== undefined) nA.doa = best.angle;
+        
         state.transientCount += data.events.length;
         const dot = document.getElementById('transient-dot');
         const lbl = document.getElementById('transient-label');
@@ -212,7 +225,7 @@ function initWebSocket() {
    ============================================================== */
 function createInitialNodes() {
   const initial = [
-    { name: 'Nó A', x: 20.0, y: 12.5 },
+    { name: 'Nó A', x: 32.0, y: 5.0 }, // Canto Superior Direito (onde você circulou)
   ];
   initial.forEach((n, i) => addNode(n.name, n.x, n.y, i));
   state.heatmapDirty = true;
@@ -303,15 +316,16 @@ function estimateSource() {
 
 /* ==============================================================
    ACUMULAR EVENTO DE CALOR NO GRID
-   Cada evento sonoro separado "pinga" energia na posição estimada
+   Agora suporta "peso" para diferenciar ambiente de impactos
    ============================================================== */
-function accumulateHeatEvent(wx, wy, intensity_db) {
+function accumulateHeatEvent(wx, wy, intensity_db, weightMultiplier = 1.0) {
   // Converter mundo → grid
   const col = Math.floor(wx / HEAT_GRID_RES);
   const row = Math.floor(wy / HEAT_GRID_RES);
   
-  // Intensidade normalizada (0-1 baseada em dB)
-  const heat = Math.max(0, Math.min(1.0, (intensity_db + 60) / 50)) * 15.0;
+  // CORREÇÃO: O DSP reporta ruído de fundo normal entre -85dB e -60dB. 
+  // Mapeamos a rampa para começar a gerar calor a partir de -85dB.
+  const heat = Math.max(0, Math.min(1.0, (intensity_db + 85) / 60)) * 25.0 * weightMultiplier;
   
   // Pintar com kernel gaussiano
   for (let dr = -HEAT_RADIUS; dr <= HEAT_RADIUS; dr++) {
@@ -577,9 +591,13 @@ function drawNodeConnections(t) {
 
 /* ---- Setas DoA ---- */
 function drawDoAArrows(t) {
+  if (state.peakActive <= 0.01) return; // Esconde no silêncio
+
   state.nodes.forEach(node => {
     const p   = worldToCanvas(node.x, node.y);
-    const ang = (node.doa - 90) * Math.PI / 180; // converter para radianos canvas
+    // CORREÇÃO: O Canvas gira 0 graus para a direita. 
+    // Subtrair 90 alinha o grau 0º com o NORTE (Cima absoluto).
+    const ang = (node.doa - 90) * Math.PI / 180;
     const len = 30 + node.doaConf * 0.3;
     const ex  = p.x + Math.cos(ang) * len;
     const ey  = p.y + Math.sin(ang) * len;
@@ -587,7 +605,7 @@ function drawDoAArrows(t) {
     ctx.save();
     ctx.strokeStyle = node.color;
     ctx.lineWidth   = 2;
-    ctx.globalAlpha = 0.7;
+    ctx.globalAlpha = Math.min(0.8, state.peakActive); // Animação de Fade out
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
     ctx.lineTo(ex, ey);
@@ -609,6 +627,10 @@ function drawDoAArrows(t) {
 
 /* ---- Fonte sonora estimada ---- */
 function drawSource(t) {
+  if (state.peakActive <= 0.01) return; // Esconde no silêncio
+
+  ctx.save();
+  ctx.globalAlpha = state.peakActive; // Aplica transparência em todo o indicador
   const sp = worldToCanvas(state.sourcePos.x, state.sourcePos.y);
   const now = Date.now() / 1000;
 
@@ -636,6 +658,7 @@ function drawSource(t) {
   ctx.fillStyle = '#f0883e';
   ctx.textAlign = 'center';
   ctx.fillText('FONTE', sp.x, sp.y + 20);
+  ctx.restore();
 }
 
 /* ---- Nó sensor ---- */
@@ -908,7 +931,9 @@ function drawCompass(angleDeg, color) {
   });
 
   // Agulha DoA
-  const rad = (angleDeg - 90) * Math.PI / 180;
+  // CORREÇÃO: O eixo base do Canvas já aponta para cima. 
+  // Rotacionamos diretamente. O '-90' antigo fazia o Norte apontar para o Oeste.
+  const rad = angleDeg * Math.PI / 180;
   ctx2.save();
   ctx2.translate(cx, cy);
   ctx2.rotate(rad);
