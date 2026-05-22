@@ -233,12 +233,12 @@ def main() -> None:
     # Resolve o checkpoint a ser carregado
     checkpoint_to_load = args.checkpoint
     if args.resume_last:
-        last_ckpt = Path(args.output_dir) / "checkpoints" / "last.ckpt"
+        last_ckpt = Path(args.output_dir) / "checkpoints" / phase.value / "last.ckpt"
         if last_ckpt.exists():
             checkpoint_to_load = str(last_ckpt)
             logger.info(f"Flag --resume-last ativada. Carregando automaticamente: {checkpoint_to_load}")
         else:
-            logger.warning("Flag --resume-last ativada, mas 'last.ckpt' não foi encontrado.")
+            logger.warning(f"Flag --resume-last ativada, mas '{last_ckpt}' não foi encontrado.")
 
     # ── Fase 3: LoRA (pipeline separado) ─────────────────────────────────────
     if phase == TrainingPhase.LORA_FINETUNE:
