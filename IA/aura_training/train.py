@@ -300,7 +300,7 @@ def main() -> None:
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
     checkpoint_cb = ModelCheckpoint(
-        dirpath        = f"{args.output_dir}/checkpoints",
+        dirpath        = f"{args.output_dir}/checkpoints/{phase.value}",
         filename       = f"aura_{{epoch:03d}}_{{val/loss_total:.4f}}_{phase.value}",
         monitor        = config.monitor_metric,
         mode           = config.monitor_mode,

@@ -449,6 +449,9 @@ class AuraLightningModule(pl.LightningModule):
         Fase 1: calcula apenas perda LeJEPA
         Fase 2/3: calcula todas as perdas + métricas de DoA em graus
         """
+        # Garante a sincronia da fase ativa com a configuração de execução atual
+        self.phase = self.cfg.phase
+
         features = batch["features"]   # [B, 5, T, F] pré-computado na CPU
         mask_ctx = batch.get("mask_ctx")
         mask_tgt = batch.get("mask_tgt")

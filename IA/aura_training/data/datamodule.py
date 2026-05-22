@@ -272,12 +272,13 @@ class AuraCollateFn:
             "mask_tgt": mask_tgt,    
         }
 
-        if self.phase in (TrainingPhase.MULTITASK, TrainingPhase.LORA_FINETUNE):
-            output.update({
-                "sources": sources,   
-                "doa":     doa,       
-                "heatmap": heatmap,   
-            })
+        # Sempre inclua os rótulos supervisionados se estiverem disponíveis (independente da fase)
+        # para suportar transição dinâmica de fase (JEPA -> Multitask) sem quebrar o dataloader
+        output.update({
+            "sources": sources,   
+            "doa":     doa,       
+            "heatmap": heatmap,   
+        })
 
         # 🟢 Augmentações Online — aplicadas APÓS collate, ANTES de retornar
         output = self.augmentor(output, is_training=self.is_training)
