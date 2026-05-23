@@ -2,8 +2,8 @@
    CONFIGURAÇÕES GLOBAIS DO GALPÃO
    ============================================================== */
 const WAREHOUSE = {
-  width:  40,  // Correção: Galpão de 40 metros para alinhar com o DSP
-  height: 25,  // Correção: Galpão de 25 metros para alinhar com o DSP
+  width:  2.0,   // Sua mesa tem 2 metros de largura
+  height: 1.5,   // Sua mesa tem 1.5 metros de profundidade
   // Obstáculos internos (máquinas/estruturas) [x, y, w, h] em metros
   obstacles: [],
   // Paredes internas
@@ -27,11 +27,11 @@ const NODE_COLORS = [
    ESTADO GLOBAL DA APLICAÇÃO
    ============================================================== */
 // Constantes do Heatmap Acumulativo
-const HEAT_GRID_RES = 1.0;   // metros por célula
+const HEAT_GRID_RES = 0.05;  // Altíssima resolução (5cm por célula) para mesa de 2m x 1.5m
 const HEAT_COLS = Math.ceil(WAREHOUSE.width  / HEAT_GRID_RES);
 const HEAT_ROWS = Math.ceil(WAREHOUSE.height / HEAT_GRID_RES);
 const HEAT_DECAY = 0.92;     // fator de decaimento por tick (0.92 = fade suave)
-const HEAT_RADIUS = 3;       // raio de influência em células
+const HEAT_RADIUS = 6;       // Raio base (30cm de influência)
 const HEAT_MAX = 100.0;      // valor máximo de calor
 
 let state = {
@@ -42,7 +42,7 @@ let state = {
   showHeatmap: true,   // Exibir heatmap
   showDoA: true,       // Exibir setas DoA
   transientCount: 0,   // Contador de transientes detectados
-  sourcePos: { x: 18, y: 14 }, // Posição estimada da fonte sonora
+  sourcePos: { x: 1.0, y: 0.75 }, // Posição estimada da fonte sonora (centro da mesa)
   tick: 0,             // Contador de ticks da simulação
   heatmapData: null,   // Cache do heatmap
   heatmapDirty: true,  // Flag para recalcular heatmap
@@ -80,9 +80,11 @@ function init() {
   window.addEventListener('resize', resizeCanvas);
 
   // Eventos do mouse no canvas
-  canvas.addEventListener('click',       onCanvasClick);
+  canvas.addEventListener('mousedown',   onCanvasMouseDown);
   canvas.addEventListener('contextmenu', onCanvasRightClick);
   canvas.addEventListener('mousemove',   onCanvasMouseMove);
+  canvas.addEventListener('mouseup',     onCanvasMouseUp);
+  canvas.addEventListener('mouseleave',  onCanvasMouseLeave);
 
   // Fechar menus ao clicar fora
   document.addEventListener('click', () => {
@@ -143,11 +145,11 @@ function initWebSocket() {
         let nodeName = `Nó ${nid}`;
         let n = state.nodes.find(node => node.name === nodeName);
         if (!n) {
-           let nx = 32.0, ny = 5.0; // Posição do Nó A (Top Right)
-           if (nid !== "A") {
-             nx = Math.random() * 20 + 10;
-             ny = Math.random() * 15 + 5;
-           }
+            let nx = 1.6, ny = 0.3; // Posição do Nó A (Top Right)
+            if (nid !== "A") {
+              nx = Math.random() * 1.0 + 0.5;
+              ny = Math.random() * 0.8 + 0.3;
+            }
            n = addNode(nodeName, nx, ny);
         }
         
@@ -164,10 +166,13 @@ function initWebSocket() {
         // Fontes separadas (se disponíveis)
         n.sources = nodeData.raw.sources || [];
         
-        // ---- 1. RASTREAMENTO AMBIENTE (Heatmap Constante e Forte) ----
-        if (nodeData.raw.ambient_x !== undefined) {
-           // Multiplicador gigante (3.0) para a Aura Térmica ser muito visível ao redor do Nó
-           accumulateHeatEvent(nodeData.raw.ambient_x, nodeData.raw.ambient_y, nodeData.raw.ambient_db, 3.0);
+        // ---- 1. RASTREAMENTO AMBIENTE (Heatmap Suave) ----
+        if (nodeData.raw.ambient_dist !== undefined) {
+           // Frontend faz o raycasting a partir da posição real e editável do Nó
+           let angRad = n.doa * Math.PI / 180;
+           let ax = n.x + nodeData.raw.ambient_dist * Math.sin(angRad);
+           let ay = n.y - nodeData.raw.ambient_dist * Math.cos(angRad);
+           accumulateHeatEvent(ax, ay, nodeData.raw.ambient_db, 0.4, 30);
         }
         
         // Atualizar bands FFT fake baseadas na energia
@@ -179,15 +184,28 @@ function initWebSocket() {
         n.waveform[n.waveform.length - 1] = (Math.random() - 0.5) * 2 * (n.spl - 60) / 40;
       }
       
-      // ---- 2. PICOS E TRANSIENTES (Apenas Seta e Esfera, SEM HEATMAP!) ----
+      // ---- 2. PICOS E TRANSIENTES (Seta e Esfera) ----
       if (data.events && data.events.length > 0) {
+        
+        // 1. Atualiza as setas de TODOS os nós que detectaram o impacto
+        for (const ev of data.events) {
+          let nEvent = state.nodes.find(n => n.name === `Nó ${ev.node}`);
+          if (nEvent && ev.angle !== undefined) {
+            nEvent.doa = ev.angle; // Cada nó aponta para o que ouviu!
+          }
+        }
+        
         // Posição da fonte mais intensa para o indicador
         let best = data.events.reduce((a, b) => a.intensity > b.intensity ? a : b);
-        state.sourcePos = { x: best.x, y: best.y };
-        state.peakActive = 1.0; // Fade In instantâneo
-        
-        let nA = state.nodes.find(n => n.name === 'Nó A');
-        if (nA && best.angle !== undefined) nA.doa = best.angle;
+        let nBest = state.nodes.find(n => n.name === `Nó ${best.node}`);
+        if (nBest) {
+           let rad = best.angle * Math.PI / 180;
+           state.sourcePos = { 
+             x: Math.max(0, Math.min(WAREHOUSE.width, nBest.x + best.dist * Math.sin(rad))),
+             y: Math.max(0, Math.min(WAREHOUSE.height, nBest.y - best.dist * Math.cos(rad)))
+           };
+           state.peakActive = 1.0;  // Dispara a visibilidade (Fade In instantâneo)
+        }
         
         state.transientCount += data.events.length;
         const dot = document.getElementById('transient-dot');
@@ -225,7 +243,7 @@ function initWebSocket() {
    ============================================================== */
 function createInitialNodes() {
   const initial = [
-    { name: 'Nó A', x: 32.0, y: 5.0 }, // Canto Superior Direito (onde você circulou)
+    { name: 'Nó A', x: 1.6, y: 0.3 }, // Canto Superior Direito
   ];
   initial.forEach((n, i) => addNode(n.name, n.x, n.y, i));
   state.heatmapDirty = true;
@@ -316,25 +334,24 @@ function estimateSource() {
 
 /* ==============================================================
    ACUMULAR EVENTO DE CALOR NO GRID
-   Agora suporta "peso" para diferenciar ambiente de impactos
    ============================================================== */
-function accumulateHeatEvent(wx, wy, intensity_db, weightMultiplier = 1.0) {
-  // Converter mundo → grid
+function accumulateHeatEvent(wx, wy, intensity_db, weightMultiplier = 1.0, rad = HEAT_RADIUS) {
   const col = Math.floor(wx / HEAT_GRID_RES);
   const row = Math.floor(wy / HEAT_GRID_RES);
   
-  // CORREÇÃO: O DSP reporta ruído de fundo normal entre -85dB e -60dB. 
-  // Mapeamos a rampa para começar a gerar calor a partir de -85dB.
   const heat = Math.max(0, Math.min(1.0, (intensity_db + 85) / 60)) * 25.0 * weightMultiplier;
   
-  // Pintar com kernel gaussiano
-  for (let dr = -HEAT_RADIUS; dr <= HEAT_RADIUS; dr++) {
-    for (let dc = -HEAT_RADIUS; dc <= HEAT_RADIUS; dc++) {
+  for (let dr = -rad; dr <= rad; dr++) {
+    for (let dc = -rad; dc <= rad; dc++) {
       const r = row + dr;
       const c = col + dc;
       if (r < 0 || r >= HEAT_ROWS || c < 0 || c >= HEAT_COLS) continue;
-      const dist2 = dr * dr + dc * dc;
-      const w = Math.exp(-dist2 / (HEAT_RADIUS * 0.8));
+      
+      const dist = Math.sqrt(dr * dr + dc * dc);
+      if (dist > rad) continue; // Máscara circular perfeita: corta as pontas do quadrado
+      
+      // Gaussiana ultra-suave (esfumaçamento orgânico)
+      const w = Math.exp(-(dist * dist) / (rad * rad * 0.3));
       const idx = r * HEAT_COLS + c;
       state.heatGrid[idx] = Math.min(HEAT_MAX, state.heatGrid[idx] + heat * w);
     }
@@ -721,7 +738,7 @@ function drawNode(node, t) {
 /* ---- Escala ---- */
 function drawScale(t) {
   const { scale, offsetX, offsetY } = getTransform();
-  const scaleLen = 10 * scale; // 10 metros em pixels
+  const scaleLen = 0.5 * scale; // 0.5 metros em pixels
   const x0 = offsetX + 5;
   const y0 = canvas.height - 28;
 
@@ -737,7 +754,7 @@ function drawScale(t) {
   ctx.font      = '10px Segoe UI';
   ctx.fillStyle = 'rgba(139,148,158,0.8)';
   ctx.textAlign = 'center';
-  ctx.fillText('10m', x0 + scaleLen / 2, y0 + 12);
+  ctx.fillText('0.5m', x0 + scaleLen / 2, y0 + 12);
 }
 
 /* ==============================================================
@@ -1070,15 +1087,20 @@ function selectNode(id) {
 /* ==============================================================
    EVENTOS DO CANVAS
    ============================================================== */
-function onCanvasClick(e) {
+let draggingNode = null;
+
+function onCanvasMouseDown(e) {
+  if (e.button !== 0) return; // Permitir arrasto apenas com botão Esquerdo
   document.getElementById('canvas-ctx-menu').classList.remove('open');
   const rect  = canvas.getBoundingClientRect();
   const cx    = e.clientX - rect.left;
   const cy    = e.clientY - rect.top;
 
-  // Verificar se clicou em algum nó
   const hit = findNodeAt(cx, cy);
-  if (hit !== null) selectNode(hit);
+  if (hit !== null) {
+    selectNode(hit);
+    draggingNode = hit; // Inicia o motor de arrasto livre
+  }
 }
 
 function onCanvasRightClick(e) {
@@ -1115,10 +1137,32 @@ function onCanvasMouseMove(e) {
   const rect = canvas.getBoundingClientRect();
   const cx   = e.clientX - rect.left;
   const cy   = e.clientY - rect.top;
-  const wPos = canvasToWorld(cx, cy);
-  // Atualizar info do canvas
-  const hit  = findNodeAt(cx, cy);
-  canvas.style.cursor = hit !== null ? 'pointer' : 'default';
+  
+  if (draggingNode !== null) {
+    let wPos = canvasToWorld(cx, cy);
+    let n = state.nodes.find(node => node.id === draggingNode);
+    if (n) {
+      n.x = Math.max(0, Math.min(WAREHOUSE.width, wPos.x));
+      n.y = Math.max(0, Math.min(WAREHOUSE.height, wPos.y));
+      state.heatmapDirty = true;
+      updateSidebarLeft(); // Atualiza numeração em tempo real
+      drawMap(); // Trava renderização cravada no mouse a 60fps
+    }
+  } else {
+    const hit  = findNodeAt(cx, cy);
+    canvas.style.cursor = hit !== null ? 'grab' : 'default';
+  }
+}
+
+function onCanvasMouseUp(e) {
+  if (draggingNode !== null) {
+    canvas.style.cursor = 'grab';
+    draggingNode = null;
+  }
+}
+
+function onCanvasMouseLeave(e) {
+  draggingNode = null;
 }
 
 /* Encontrar nó próximo ao ponto (px) */

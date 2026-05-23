@@ -25,6 +25,7 @@ import math
 import queue
 import socket
 import struct
+import sys
 import threading
 import time
 import traceback
@@ -49,6 +50,15 @@ PTP_PORT = 5007   # porta no servidor para receber pings PTP
 WS_PORT  = 8765
 WS_THROTTLE_FRAMES = 3   # broadcast WS a cada N hops (~17 ms)
 
+# ─────────────────────────────────────────────────────────────
+# FLAG DE TESTE (Monitoramento de Áudio Local)
+# ─────────────────────────────────────────────────────────────
+LISTEN_NODE = "A"
+if "--listen" in sys.argv:
+    idx = sys.argv.index("--listen")
+    if idx + 1 < len(sys.argv):
+        LISTEN_NODE = sys.argv[idx + 1].upper()
+
 SAMPLE_RATE   = 44100
 ANALYSIS_SIZE = 512
 HOP_SIZE      = ANALYSIS_SIZE // 2  # 256
@@ -62,8 +72,8 @@ EMA_FAST = 0.3
 EMA_SLOW = 0.1
 
 # Geometria da sala (metros)
-POS_NO_A  = (32.0, 5.0)   # Canto Superior Direito do galpão de 40x25 metros
-ROOM_BBOX = (-1.0, -1.0, 41.0, 26.0)  # (x_min, y_min, x_max, y_max) ajustado pro galpão
+POS_NO_A  = (1.6, 0.3)   # Canto Superior Direito da mesa de 2.0m x 1.5m
+ROOM_BBOX = (-0.5, -0.5, 2.5, 2.0)  # (x_min, y_min, x_max, y_max) ajustado para a mesa
 
 SYNC_WINDOW_MS = 50
 
@@ -362,19 +372,19 @@ class NarrowbandSourceSeparator:
 
     def process(self, channels):
         """
-        channels: lista de 3 arrays numpy (mic1, mic2, mic3).
+        channels: lista de arrays numpy (mics).
         Retorna lista de dicts, cada um representando uma fonte separada:
           { 'angle': float, 'db': float, 'dom_freq': float,
             'energy': float, 'confidence': float }
         """
-        if len(channels) < 3:
+        if len(channels) < 2:
             return []
 
         N = len(channels[0])
         if N < 64:
             return []
 
-        # FFT dos 3 canais com janela para evitar vazamento
+        # FFT dos canais com janela para evitar vazamento
         window = np.hanning(N)
         specs = [np.fft.rfft(ch * window) for ch in channels]
         
@@ -383,30 +393,36 @@ class NarrowbandSourceSeparator:
         mags = [np.abs(s) / norm_factor for s in specs]
 
         # Energia total média (para threshold)
-        avg_mag = (mags[0] + mags[1] + mags[2]) / 3.0
+        avg_mag = np.mean(mags, axis=0)
         total_energy = float(np.sum(avg_mag ** 2))
         if total_energy < 1e-12:
             return []
 
-        # CORREÇÃO NARROWBAND: Nova Geometria Física [0]=Esq, [1]=Dir, [2]=Frente
-        spec_center = (specs[0] + specs[1]) / 2.0
-        phase_RL = np.angle(specs[1] * np.conj(specs[0]))         # Fase Dir -> Esq
-        phase_FC = np.angle(specs[2] * np.conj(spec_center))      # Fase Frente -> Centro
+        # Fase Dir -> Esq
+        phase_RL = np.angle(specs[1] * np.conj(specs[0]))
 
         omega = 2.0 * np.pi * self.freqs
         omega[0] = 1e-12  # DC
 
-        # CORREÇÃO FÍSICA: Fases limpas (sem inversão algébrica artificial)
         tau_RL = phase_RL / omega
-        tau_FC = phase_FC / omega
         
-        # ESCALA GEOMÉTRICA DO TRIÂNGULO EQUILÁTERO
-        # O Eixo Y (Frente-Centro) é fisicamente mais curto que o Eixo X (Esq-Dir)
-        # Multiplicamos Y por (2 / sqrt(3)) para transformar o oval acústico num círculo perfeito.
-        X = tau_RL
-        Y = tau_FC / (math.sqrt(3) / 2.0)
-        
-        angles_per_bin = np.degrees(np.arctan2(X, Y))
+        if len(channels) >= 3:
+            # MODO 3 MICS (360º)
+            spec_center = (specs[0] + specs[1]) / 2.0
+            phase_FC = np.angle(specs[2] * np.conj(spec_center))
+            tau_FC = phase_FC / omega
+            X = tau_RL
+            Y = tau_FC / (math.sqrt(3) / 2.0)
+            angles_per_bin = np.degrees(np.arctan2(X, Y))
+        else:
+            # MODO 2 MICS FALLBACK (180º Trás / Baixo)
+            sin_vals = (tau_RL * 343.0) / MIC_DIST_M
+            sin_vals = np.clip(sin_vals, -1.0, 1.0)
+            
+            # Inverter Y (apontar para baixo): 180 - angulo
+            # Mantém Direita como 90 e Esquerda como -90 (270)
+            angles_per_bin = 180.0 - np.degrees(np.arcsin(sin_vals))
+            
         angles_per_bin = (angles_per_bin + 360) % 360
 
         # Peso = magnitude média (ignora DC e freqs inválidas acima de Nyquist/2)
@@ -586,11 +602,14 @@ class AudioDSP:
             lag_RL, coh_RL = 0, 0.0
             best_lag, coherence = 0, 0.0
         else:
-            # Fallback 2 mics
+            # MODO 2 MICS FALLBACK (Apenas se o 3º Mic não estiver funcionando)
             best_lag, coherence = xcorr_fft(left, right, XCORR_MAX_LAG)
             itd_s = best_lag / self.sr
             sin_a = max(-1.0, min(1.0, (itd_s * 343.0) / MIC_DIST_M))
-            angle_raw = math.degrees(math.asin(sin_a))
+            
+            # Inverte o eixo (aponta para 180) APENAS para os nós defeituosos
+            angle_raw = 180.0 - math.degrees(math.asin(sin_a))
+            angle_raw = (angle_raw + 360.0) % 360.0
             conf_raw  = coherence
 
         ild = db_R - db_L
@@ -676,7 +695,7 @@ def triangulate(angA, angB, posA, posB):
 hpf = HighPassFilter(cutoff=80.0, fs=SAMPLE_RATE, order=4)
 noise_reducer = SpectralNoiseReducer(
     sr=SAMPLE_RATE, fft_size=ANALYSIS_SIZE, hop_size=HOP_SIZE,
-    calib_time=10.0, smooth=0.91, over_sub=4.0, noise_floor=0.005,
+    calib_time=3.0, smooth=0.91, over_sub=4.0, noise_floor=0.005,
 )
 soft_gate = SoftNoiseGate(
     threshold_db=-55.0, attack_ms=5.0, release_ms=80.0,
@@ -829,6 +848,19 @@ def _compute_on_audio(node_id, frame, ts_us, *channels):
     }
 
     analysis_chs = [f[:ANALYSIS_SIZE] for f in flats]
+
+    # --- PROTEÇÃO DE HARDWARE: DETECÇÃO DE MIC 3 MORTO ---
+    if len(analysis_chs) >= 3:
+        rms_3 = float(np.sqrt(np.mean(analysis_chs[2]**2)))
+        
+        # Microfones reais nunca produzem silêncio absoluto (INMP441 tem ruído natural de ~ -80dB).
+        # Se o cabo I2S soltar/falhar, o sinal cai para ZERO digital absoluto (-120dB).
+        db_3 = 20.0 * math.log10(rms_3) if rms_3 > 1e-6 else -120.0
+        
+        # Corta o Mic 3 APENAS se ele estiver matematicamente morto (falha elétrica grave)
+        if db_3 < -100.0:
+            analysis_chs = analysis_chs[:2] 
+
     result = dsp.process(node_id, *analysis_chs)
     result['timestamp'] = ts_blk
     result['frame'] = frame
@@ -894,12 +926,11 @@ async def on_audio(node_id, frame, ts_us, *channels):
         node["ambient_db"] = 0.95 * node["ambient_db"] + 0.05 * db_avg  # Adaptação levemente mais rápida
         
         amb_ang = result['angle']
-        # HALO ACÚSTICO: O som ambiente deve formar uma aura envolta do próprio microfone
-        # Raio de apenas 0.5 a 3 metros (focando a mancha de calor no Nó A)
-        amb_dist = max(0.5, min(3.0, (node["ambient_db"] + 90.0) * 0.05))
-        amb_rad = math.radians(amb_ang)
-        result['ambient_x'] = max(ROOM_BBOX[0], min(ROOM_BBOX[2], POS_NO_A[0] + amb_dist * math.sin(amb_rad)))
-        result['ambient_y'] = max(ROOM_BBOX[1], min(ROOM_BBOX[3], POS_NO_A[1] - amb_dist * math.cos(amb_rad)))
+        # ANCORAGEM ESPACIAL: O ruído ambiente é uma "aura" do sensor.
+        # Fixamos a origem muito perto do microfone (1.5m). O raio da 
+        # nuvem fará o trabalho de "engolir" o Nó A.
+        amb_dist = 1.5
+        result['ambient_dist'] = amb_dist
         result['ambient_db'] = round(node["ambient_db"], 1)
 
         # 2. DETECTOR DE PICOS (Transientes > 6dB acima do fundo)
@@ -918,17 +949,9 @@ async def on_audio(node_id, frame, ts_us, *channels):
                 dist_coh = 0.5 * math.exp(4.5 * (1.0 - coh))
                 dist_est = max(0.5, min(40.0, 0.4 * dist_spl + 0.6 * dist_coh))
 
-                ang_rad = math.radians(src_ang)
-                x_est = POS_NO_A[0] + dist_est * math.sin(ang_rad)
-                y_est = POS_NO_A[1] - dist_est * math.cos(ang_rad)
-
-                xmin, ymin, xmax, ymax = ROOM_BBOX
-                x_est = max(xmin, min(xmax, x_est))
-                y_est = max(ymin, min(ymax, y_est))
-
                 state["events"].append({
-                    "x": round(x_est, 2),
-                    "y": round(y_est, 2),
+                    "node": node_id,
+                    "dist": round(dist_est, 2),
                     "angle": round(src_ang, 1),
                     "intensity": round(src_db, 1),
                     "confidence": round(src_conf, 2),
@@ -1039,10 +1062,11 @@ async def process_packet(data: bytes):
 
     outs = [np.concatenate(nr_out[i]) for i in range(3)]
 
-    # 3. Playback (Nó A) - Aplicando Saturação APENAS na rota de áudio (preservando fidelidade da análise DSP)
-    if PLAY_AUDIO and node_id == "A":
-        pb_L = soft_saturate(dc_block_fast(outs[0], "A_L"), drive_db=6.0, makeup_db=-1.5, knee=0.7)
-        pb_R = soft_saturate(dc_block_fast(outs[1], "A_R"), drive_db=6.0, makeup_db=-1.5, knee=0.7)
+    # 3. Playback (Nó Dinâmico via Flag) - Ouve o nó definido em LISTEN_NODE
+    # Chaves "pb_L" dinâmicas previnem que o DC-Blocker corrompa a memória se o nó mudar
+    if PLAY_AUDIO and node_id == LISTEN_NODE:
+        pb_L = soft_saturate(dc_block_fast(outs[0], f"{node_id}_pb_L"), drive_db=6.0, makeup_db=-1.5, knee=0.7)
+        pb_R = soft_saturate(dc_block_fast(outs[1], f"{node_id}_pb_R"), drive_db=6.0, makeup_db=-1.5, knee=0.7)
         chunk = np.column_stack((
             pb_L.astype(np.float32),
             pb_R.astype(np.float32),
@@ -1093,17 +1117,12 @@ async def main_loop():
             parts = []
             for nid, st in noise_reducer._state.items():
                 cal  = "[OK]" if st["calibrated"] else f"[{st['calib_count']}]"
-                gm_L = float(np.mean(st["gain_smooth_0"]))
-                gm_R = float(np.mean(st["gain_smooth_1"]))
-                parts.append(f"{nid}:cal={cal} g=L{gm_L:.2f}/R{gm_R:.2f}")
-            raw_a  = state["nodes"].get("A", {}).get("raw")
-            db_str = ""
-            if raw_a:
-                db_str = (f" | dB={raw_a['db_L']:.1f}/{raw_a['db_R']:.1f}"
-                          f" ang={raw_a['angle']:.1f}deg")
-            print(f"[INFO] frames={frames_total} | "
-                  f"{' | '.join(parts)}{db_str} | "
-                  f"ev={len(state['events'])} ws={len(connected)}")
+                raw_n = state["nodes"].get(nid, {}).get("raw")
+                if raw_n:
+                    parts.append(f"{nid}:{cal} dB={raw_n['db_L']:.0f}/{raw_n['db_R']:.0f} ang={raw_n['angle']:.0f}°")
+                else:
+                    parts.append(f"{nid}:{cal}")
+            print(f"[INFO] frames={frames_total} | {' | '.join(parts)} | ev={len(state['events'])} ws={len(connected)}")
 
 
 # ─────────────────────────────────────────────────────────────
