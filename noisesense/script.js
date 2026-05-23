@@ -42,7 +42,7 @@ let state = {
   showHeatmap: true,   // Exibir heatmap
   showDoA: true,       // Exibir setas DoA
   transientCount: 0,   // Contador de transientes detectados
-  sourcePos: { x: 1.0, y: 0.75 }, // Posição estimada da fonte sonora (centro da mesa)
+  activeSources: [],   // Array de fontes ativas (Trianguladas ou Estimadas)
   tick: 0,             // Contador de ticks da simulação
   heatmapData: null,   // Cache do heatmap
   heatmapDirty: true,  // Flag para recalcular heatmap
@@ -195,16 +195,53 @@ function initWebSocket() {
           }
         }
         
-        // Posição da fonte mais intensa para o indicador
-        let best = data.events.reduce((a, b) => a.intensity > b.intensity ? a : b);
-        let nBest = state.nodes.find(n => n.name === `Nó ${best.node}`);
-        if (nBest) {
-           let rad = best.angle * Math.PI / 180;
-           state.sourcePos = { 
-             x: Math.max(0, Math.min(WAREHOUSE.width, nBest.x + best.dist * Math.sin(rad))),
-             y: Math.max(0, Math.min(WAREHOUSE.height, nBest.y - best.dist * Math.cos(rad)))
-           };
-           state.peakActive = 1.0;  // Dispara a visibilidade (Fade In instantâneo)
+        state.activeSources = [];
+        state.peakActive = 1.0;
+
+        // Mapeia múltiplos eventos (sons distintos) por nó
+        let eventsByNode = {};
+        data.events.forEach(ev => {
+          if (!eventsByNode[ev.node]) eventsByNode[ev.node] = [];
+          eventsByNode[ev.node].push(ev);
+        });
+        const nodeKeys = Object.keys(eventsByNode);
+        let triangulated = false;
+
+        // 2. TENTATIVA DE TRIANGULAÇÃO CRUZADA (Interseção de Raios)
+        if (nodeKeys.length >= 2) {
+          for (let i = 0; i < nodeKeys.length; i++) {
+            for (let j = i + 1; j < nodeKeys.length; j++) {
+               let n1 = state.nodes.find(n => n.name === `Nó ${nodeKeys[i]}`);
+               let n2 = state.nodes.find(n => n.name === `Nó ${nodeKeys[j]}`);
+               if (!n1 || !n2) continue;
+
+               for (let ev1 of eventsByNode[nodeKeys[i]]) {
+                 for (let ev2 of eventsByNode[nodeKeys[j]]) {
+                   let pt = triangulateRays(n1.x, n1.y, ev1.angle, n2.x, n2.y, ev2.angle);
+                   // Se as setas se cruzarem DENTRO da mesa
+                   if (pt && pt.x >= 0 && pt.x <= WAREHOUSE.width && pt.y >= 0 && pt.y <= WAREHOUSE.height) {
+                     state.activeSources.push({ x: pt.x, y: pt.y, label: "TRIANGULADO" });
+                     triangulated = true;
+                   }
+                 }
+               }
+            }
+          }
+        }
+
+        // 3. FALLBACK: ESTIMATIVA (Se houver apenas 1 nó ou raios paralelos)
+        if (!triangulated) {
+          for (const ev of data.events) {
+            let n = state.nodes.find(nd => nd.name === `Nó ${ev.node}`);
+            if (n) {
+              let rad = ev.angle * Math.PI / 180;
+              state.activeSources.push({
+                x: Math.max(0, Math.min(WAREHOUSE.width, n.x + ev.dist * Math.sin(rad))),
+                y: Math.max(0, Math.min(WAREHOUSE.height, n.y - ev.dist * Math.cos(rad))),
+                label: "ESTIMADO"
+              });
+            }
+          }
         }
         
         state.transientCount += data.events.length;
@@ -236,6 +273,29 @@ function initWebSocket() {
     }
     setTimeout(initWebSocket, 3000);
   };
+}
+
+/* ==============================================================
+   MATEMÁTICA DE TRIANGULAÇÃO (Interseção Linear)
+   ============================================================== */
+function triangulateRays(x1, y1, deg1, x2, y2, deg2) {
+  const r1 = deg1 * Math.PI / 180;
+  const r2 = deg2 * Math.PI / 180;
+  const dx1 = Math.sin(r1), dy1 = -Math.cos(r1);
+  const dx2 = Math.sin(r2), dy2 = -Math.cos(r2);
+
+  const det = dx2 * dy1 - dx1 * dy2;
+  if (Math.abs(det) < 0.01) return null; // Raios quase paralelos
+
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+
+  const t1 = (dx2 * dy - dy2 * dx) / det;
+  const t2 = (dx1 * dy - dy1 * dx) / det;
+
+  // O ponto de colisão precisa estar NA FRENTE de ambas as setas (tempo > 0)
+  if (t1 > 0 && t2 > 0) return { x: x1 + t1 * dx1, y: y1 + t1 * dy1 };
+  return null;
 }
 
 /* ==============================================================
@@ -644,37 +704,39 @@ function drawDoAArrows(t) {
 
 /* ---- Fonte sonora estimada ---- */
 function drawSource(t) {
-  if (state.peakActive <= 0.01) return; // Esconde no silêncio
-
+  if (state.peakActive <= 0.01 || state.activeSources.length === 0) return;
+  
   ctx.save();
   ctx.globalAlpha = state.peakActive; // Aplica transparência em todo o indicador
-  const sp = worldToCanvas(state.sourcePos.x, state.sourcePos.y);
   const now = Date.now() / 1000;
 
-  // Ondas de propagação
-  for (let i = 1; i <= 4; i++) {
-    const r = (i * 18) + (now * 20) % 18;
+  state.activeSources.forEach(src => {
+    const sp = worldToCanvas(src.x, src.y);
+    const color = src.label === "TRIANGULADO" ? '248,81,73' : '240,136,62'; // Vermelho exato vs Laranja estimado
+    
+    for (let i = 1; i <= 3; i++) {
+      const r = (i * 12) + (now * 20) % 12;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${color},${0.35 - i * 0.1})`;
+      ctx.lineWidth   = 1.5;
+      ctx.stroke();
+    }
+    
     ctx.beginPath();
-    ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(240,136,62,${0.35 - i * 0.07})`;
-    ctx.lineWidth   = 1.5;
-    ctx.stroke();
-  }
+    ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle   = `rgb(${color})`;
+    ctx.shadowBlur  = 12;
+    ctx.shadowColor = `rgb(${color})`;
+    ctx.fill();
+    ctx.shadowBlur  = 0;
 
-  // Marcador central
-  ctx.beginPath();
-  ctx.arc(sp.x, sp.y, 8, 0, Math.PI * 2);
-  ctx.fillStyle   = '#f0883e';
-  ctx.shadowBlur  = 12;
-  ctx.shadowColor = '#f0883e';
-  ctx.fill();
-  ctx.shadowBlur  = 0;
-
-  // Rótulo
-  ctx.font      = 'bold 9px Segoe UI';
-  ctx.fillStyle = '#f0883e';
-  ctx.textAlign = 'center';
-  ctx.fillText('FONTE', sp.x, sp.y + 20);
+    ctx.font      = 'bold 9px Segoe UI';
+    ctx.fillStyle = `rgb(${color})`;
+    ctx.textAlign = 'center';
+    ctx.fillText(src.label, sp.x, sp.y + 16);
+  });
+  
   ctx.restore();
 }
 
@@ -795,8 +857,11 @@ function updateTopbar() {
   document.getElementById('ts-splmed').textContent = avgSPL + ' dB';
   document.getElementById('ts-i2s').textContent    = avgI2S + '%';
 
-  const src = state.sourcePos;
-  document.getElementById('ts-source').textContent = `(${src.x.toFixed(1)}, ${src.y.toFixed(1)}) m`;
+  if (state.activeSources && state.activeSources.length > 0) {
+    document.getElementById('ts-source').textContent = `${state.activeSources.length} FONTE(S) ativas`;
+  } else {
+    document.getElementById('ts-source').textContent = `--`;
+  }
 
   // NR-15 classificação
   const mx = parseFloat(maxSPL);

@@ -1001,10 +1001,15 @@ udp_data_queue: asyncio.Queue  # inicializado no main()
 
 def _udp_receiver_thread(loop_ref, q_ref, sock_ref):
     print(f"[UDP-THREAD] Recebendo em {UDP_IP}:{UDP_PORT}")
+    def _safe_put(d):
+        try:
+            q_ref.put_nowait(d)
+        except asyncio.QueueFull:
+            pass  # Descarte silencioso por lentidão no loop de processamento
     while True:
         try:
             data, _ = sock_ref.recvfrom(4096)
-            loop_ref.call_soon_threadsafe(q_ref.put_nowait, data)
+            loop_ref.call_soon_threadsafe(_safe_put, data)
         except Exception as exc:
             print(f"[UDP-THREAD] {exc}")
             time.sleep(0.001)
