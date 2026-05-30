@@ -1,13 +1,14 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <driver/i2s.h>
+#include <driver/gpio.h>
 #include <time.h>
 #include <sys/time.h>
 
 // ============================================================
 // IDENTIFICAÇÃO DO NÓ
 // ============================================================
-#define NODE_ID 'B'
+#define NODE_ID 'A'
 
 // ============================================================
 // REDE
@@ -26,15 +27,15 @@ WiFiUDP udp_ctrl;
 // PINOS I2S0 - MIC 1 + MIC 2
 // ============================================================
 #define I2S0_WS_PIN   12
-#define I2S0_SCK_PIN  10
+#define I2S0_SCK_PIN  3
 #define I2S0_SD_PIN   11
 #define I2S0_PORT     I2S_NUM_0
 
 // ============================================================
-// PINOS I2S1 - MIC 3
+// PINOS I2S1 - MIC 3 (SLAVE FÍSICO)
 // ============================================================
-#define I2S1_WS_PIN   36
-#define I2S1_SCK_PIN  35
+#define I2S1_WS_PIN   21  // Ligar um Jumper físico do Pino 21 para o 36
+#define I2S1_SCK_PIN  35  // Ligar um Jumper físico do Pino 3 para o 35
 #define I2S1_SD_PIN   0
 #define I2S1_PORT     I2S_NUM_1
 
@@ -80,17 +81,6 @@ static uint8_t pkt_buf[HEADER_SIZE + BLOCK_SIZE * 3 * sizeof(int16_t)];
 uint32_t frame_counter = 0;
 
 // ============================================================
-// FREERTOS & QUEUE (Desacoplamento Áudio -> Rede)
-// ============================================================
-#define MAX_PKT_LEN (HEADER_SIZE + BLOCK_SIZE * 3 * sizeof(int16_t))
-typedef struct {
-  uint8_t payload[MAX_PKT_LEN];
-  size_t len;
-} udp_msg_t;
-
-QueueHandle_t udp_queue;
-
-// ============================================================
 // TIMESTAMP CORRIGIDO
 // ============================================================
 static inline uint64_t get_corrected_time_us() {
@@ -99,53 +89,38 @@ static inline uint64_t get_corrected_time_us() {
 }
 
 // ============================================================
-// I2S0 SETUP - MASTER COM APLL
+// I2S SETUP GENÉRICO
 // ============================================================
-void setup_i2s0_master() {
+void setup_i2s_port(i2s_port_t port, int ws_pin, int sck_pin, int sd_pin, i2s_channel_fmt_t channel_fmt, i2s_mode_t role) {
   i2s_config_t cfg = {};
-  cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+  cfg.mode                 = (i2s_mode_t)(role | I2S_MODE_RX);
   cfg.sample_rate          = SAMPLE_RATE;
   cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT;
-  cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT;
+  cfg.channel_format       = channel_fmt;
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
   cfg.dma_buf_count        = 8;
-  cfg.dma_buf_len          = BLOCK_SIZE;
-  cfg.use_apll             = true; // A MÁGICA: Usa o mesmo relógio base APLL do I2S1! Sincronia perfeita.
+  cfg.dma_buf_len          = 128;
+  cfg.use_apll             = true;
+  cfg.tx_desc_auto_clear   = false;
+  cfg.fixed_mclk           = 0;
 
   i2s_pin_config_t pins = {};
-  pins.bck_io_num   = I2S0_SCK_PIN;  // 10
-  pins.ws_io_num    = I2S0_WS_PIN;   // 12
+  pins.bck_io_num   = sck_pin;
+  pins.ws_io_num    = ws_pin;
   pins.data_out_num = I2S_PIN_NO_CHANGE;
-  pins.data_in_num  = I2S0_SD_PIN;   // 11
+  pins.data_in_num  = sd_pin;
 
-  ESP_ERROR_CHECK(i2s_driver_install(I2S0_PORT, &cfg, 0, NULL));
-  ESP_ERROR_CHECK(i2s_set_pin(I2S0_PORT, &pins));
-}
+  ESP_ERROR_CHECK(i2s_driver_install(port, &cfg, 0, NULL));
+  ESP_ERROR_CHECK(i2s_set_pin(port, &pins));
+  i2s_start(port);
 
-// ============================================================
-// I2S1 SETUP - MASTER COM APLL
-// ============================================================
-void setup_i2s1_master_apll() {
-  i2s_config_t cfg = {};
-  cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX); // MASTER novamente
-  cfg.sample_rate          = SAMPLE_RATE;
-  cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT;
-  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;
-  cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-  cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
-  cfg.dma_buf_count        = 8;
-  cfg.dma_buf_len          = BLOCK_SIZE;
-  cfg.use_apll             = true; // A MÁGICA: Usa o mesmo relógio base APLL do I2S0! Sincronia perfeita.
-
-  i2s_pin_config_t pins = {};
-  pins.bck_io_num   = I2S1_SCK_PIN;  // 35
-  pins.ws_io_num    = I2S1_WS_PIN;   // 36
-  pins.data_out_num = I2S_PIN_NO_CHANGE;
-  pins.data_in_num  = I2S1_SD_PIN;   // 0
-
-  ESP_ERROR_CHECK(i2s_driver_install(I2S1_PORT, &cfg, 0, NULL));
-  ESP_ERROR_CHECK(i2s_set_pin(I2S1_PORT, &pins));
+  // Limpa buffers iniciais
+  size_t br = 0;
+  int32_t flush_buf[BLOCK_SIZE * 2];
+  for (int i = 0; i < 4; i++) {
+    i2s_read(port, flush_buf, sizeof(flush_buf), &br, pdMS_TO_TICKS(100));
+  }
 }
 
 // ============================================================
@@ -194,27 +169,10 @@ void setup_wifi() {
 }
 
 // ============================================================
-// RECEBE OFFSET DO SERVIDOR PYTHON E ENVIA PING PTP
-// Protocolo: 8 bytes int64 little-endian de offset
+// RECEBE OFFSET DO SERVIDOR PYTHON
+// Protocolo: 8 bytes int64 little-endian
 // ============================================================
 void check_time_offset() {
-  // Envia ping PTP a cada 5 segundos
-  static uint32_t last_ptp_send = 0;
-  if (millis() - last_ptp_send >= 5000) {
-    last_ptp_send = millis();
-    
-    int64_t t1_us = (int64_t)esp_timer_get_time();
-    uint8_t ptp_pkt[9];
-    memcpy(ptp_pkt, &t1_us, 8);
-    ptp_pkt[8] = (uint8_t)NODE_ID;
-    
-    if (WiFi.status() == WL_CONNECTED) {
-      udp_ctrl.beginPacket(UDP_HOST_IP, 5007); // PTP_PORT = 5007 no servidor Python
-      udp_ctrl.write(ptp_pkt, 9);
-      udp_ctrl.endPacket();
-    }
-  }
-
   int pktSize = udp_ctrl.parsePacket();
   if (pktSize == 8) {
     uint8_t buf[8];
@@ -222,12 +180,8 @@ void check_time_offset() {
     int64_t new_offset;
     memcpy(&new_offset, buf, 8);
 
-    // CORREÇÃO: Se for a primeira inicialização, aplicar imediato para sincronia instantânea.
-    if (time_offset_us == 0) {
-      time_offset_us = new_offset;
-    } else {
-      time_offset_us = (time_offset_us * 3 + new_offset) / 4;
-    }
+    // suavização para evitar salto brusco
+    time_offset_us = (time_offset_us * 3 + new_offset) / 4;
 
     Serial.printf("[SYNC] Offset aplicado: %lld µs\n", (long long)time_offset_us);
   }
@@ -239,23 +193,6 @@ void check_time_offset() {
 // ============================================================
 static inline int16_t i32_to_i16(int32_t x) {
   return (int16_t)(x >> 16);
-}
-
-// ============================================================
-// TAREFA FREERTOS: REDE (Envia pacotes UDP em Background)
-// ============================================================
-void udp_tx_task(void *pvParameters) {
-  udp_msg_t msg;
-  while (true) {
-    // Fica bloqueado esperando pacote na queue
-    if (xQueueReceive(udp_queue, &msg, portMAX_DELAY) == pdTRUE) {
-      if (WiFi.status() == WL_CONNECTED) {
-        udp.beginPacket(UDP_HOST_IP, UDP_PORT);
-        udp.write(msg.payload, msg.len);
-        udp.endPacket();
-      }
-    }
-  }
 }
 
 // ============================================================
@@ -273,28 +210,18 @@ void setup() {
 
   setup_wifi();
 
-  // Inicializa I2S0 (Master com APLL)
-  setup_i2s0_master();
+  // 1º INICIALIZAR O SLAVE (I2S1)
+  // Pinos 35 e 36 como ENTRADAS. Fica aguardando o clock físico via Jumper.
+  setup_i2s_port(I2S1_PORT, I2S1_WS_PIN, I2S1_SCK_PIN, I2S1_SD_PIN, I2S_CHANNEL_FMT_ONLY_LEFT, I2S_MODE_SLAVE);
 
-  // Inicializa I2S1 (Master com APLL)
-  setup_i2s1_master_apll();
+  // 2º INICIALIZAR O MASTER (I2S0)
+  // Pinos 10 e 12 como SAÍDAS. Começa a gerar o clock, que viaja pelo fio 
+  // e acorda o I2S1 instantaneamente.
+  setup_i2s_port(I2S0_PORT, I2S0_WS_PIN, I2S0_SCK_PIN, I2S0_SD_PIN, I2S_CHANNEL_FMT_RIGHT_LEFT, I2S_MODE_MASTER);
 
-  // 🔴 A GRANDE CORREÇÃO: Disparo Síncrono de DMA
-  // Inicia os dois relógios sequencialmente (diferença de nanosegundos apenas)
-  Serial.println("[I2S] Sincronizando relógios DMA...");
-  i2s_start(I2S0_PORT);
-  i2s_start(I2S1_PORT);
-
-  // Limpa o lixo de inicialização lendo os dois simultaneamente
-  size_t br0, br1;
-  for (int i = 0; i < 8; i++) {
-    i2s_read(I2S0_PORT, raw_i2s0, sizeof(raw_i2s0), &br0, pdMS_TO_TICKS(100));
-    i2s_read(I2S1_PORT, raw_i2s1, sizeof(raw_i2s1), &br1, pdMS_TO_TICKS(100));
-  }
-
-  // Inicializa Queue e a Task de Rede no Core 0 (Core do WiFi)
-  udp_queue = xQueueCreate(10, sizeof(udp_msg_t));
-  xTaskCreatePinnedToCore(udp_tx_task, "UDP_TX", 4096, NULL, 2, NULL, 0);
+  // Limpa o DMA (Descarta o lixo inicial que gerou descompasso)
+  i2s_zero_dma_buffer(I2S0_PORT);
+  i2s_zero_dma_buffer(I2S1_PORT);
 
   Serial.printf("[OK] RAM após init: %u bytes\n", ESP.getFreeHeap());
   Serial.println("[OK] Streaming ativo...\n");
@@ -319,7 +246,11 @@ void loop() {
     pdMS_TO_TICKS(100)
   );
 
-  if (err0 != ESP_OK || br0 == 0) return;
+  if (err0 != ESP_OK || br0 == 0) {
+    Serial.println("[ERRO] Falha ao ler I2S0 (Mic 1 e 2). Clock ausente?");
+    delay(500);
+    return;
+  }
 
   uint64_t ts_i2s1 = get_corrected_time_us();
 
@@ -332,7 +263,11 @@ void loop() {
     pdMS_TO_TICKS(100)
   );
 
-  if (err1 != ESP_OK || br1 == 0) return;
+  if (err1 != ESP_OK || br1 == 0) {
+    Serial.println("[ERRO] Falha ao ler I2S1 (Mic 3).");
+    delay(500);
+    return;
+  }
 
   int frames0 = br0 / (sizeof(int32_t) * 2);   // stereo
   int frames1 = br1 / sizeof(int32_t);         // mono
@@ -374,14 +309,13 @@ void loop() {
     memcpy(p, &mic3_buf[i], sizeof(int16_t)); p += sizeof(int16_t);
   }
 
-  // CORREÇÃO: Desacoplando rede. O loop envia para a fila, não bloqueando o DMA de Áudio.
-  udp_msg_t out_msg;
   int pkt_len = HEADER_SIZE + frames * 3 * sizeof(int16_t);
-  out_msg.len = pkt_len;
-  memcpy(out_msg.payload, pkt_buf, out_msg.len);
-  
-  // Tenta enviar para a Queue sem bloquear. Se a rede gargalar, dropa pacote, mas mantém o clock do áudio I2S vivo.
-  xQueueSend(udp_queue, &out_msg, 0);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    udp.beginPacket(UDP_HOST_IP, UDP_PORT);
+    udp.write(pkt_buf, pkt_len);
+    udp.endPacket();
+  }
 
   // Log a cada 5s
   static uint32_t last_log = 0;
