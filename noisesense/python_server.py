@@ -16,9 +16,12 @@ import numpy as np
 import websockets
 
 import config
+# pyrefly: ignore [missing-import]
 import state
 from parser import parse_binary
+# pyrefly: ignore [missing-import]
 from dsp import hpf, noise_reducer, soft_gate, dsp, source_sep, dc_block_fast, soft_saturate
+# pyrefly: ignore [missing-import]
 from workers import start_ptp_worker, start_playback_worker, start_udp_receiver
 
 # Fila assíncrona UDP principal
